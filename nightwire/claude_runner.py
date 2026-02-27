@@ -1,6 +1,7 @@
 """Claude CLI runner for nightwire."""
 
 import asyncio
+import json
 import os
 from enum import Enum
 from pathlib import Path
@@ -23,6 +24,7 @@ RETRY_BASE_DELAY = 5  # seconds
 
 class ErrorCategory(str, Enum):
     """Classification of Claude CLI errors for retry decisions."""
+
     TRANSIENT = "transient"
     PERMANENT = "permanent"
     INFRASTRUCTURE = "infrastructure"
@@ -52,9 +54,15 @@ def classify_error(return_code: int, output: str, error_text: str) -> ErrorCateg
     # Rate limit errors - check for subscription-level patterns first
     if "rate limit" in combined or "429" in combined:
         subscription_patterns = (
-            "usage limit", "daily limit", "capacity", "overloaded",
-            "too many requests", "try again later", "quota exceeded",
-            "hourly limit", "subscription",
+            "usage limit",
+            "daily limit",
+            "capacity",
+            "overloaded",
+            "too many requests",
+            "try again later",
+            "quota exceeded",
+            "hourly limit",
+            "subscription",
         )
         for pattern in subscription_patterns:
             if pattern in combined:
@@ -98,11 +106,98 @@ class ClaudeRunner:
     def set_project(self, project_path: Path):
         """Set the current project directory."""
         from .security import validate_project_path
+
         validated = validate_project_path(str(project_path))
         if validated is None:
             raise ValueError(f"Project path validation failed: access denied")
         self.current_project = validated
         logger.info("project_set", path=str(validated))
+
+    def _build_runner_command(self, project_path: Path) -> List[str]:
+        """Build CLI command for configured runner."""
+        if self.config.runner_type == "opencode":
+            return [
+                self.config.runner_path,
+                "run",
+                "--format",
+                "json",
+                "--dir",
+                str(project_path),
+            ]
+
+        return [
+            self.config.claude_path,
+            "--print",
+            "--dangerously-skip-permissions",
+            "--verbose",
+            "--max-turns",
+            str(self.config.claude_max_turns),
+        ]
+
+    def _build_subprocess_env(self) -> dict:
+        """Build minimal environment for configured runner."""
+        env = {
+            "HOME": os.environ.get("HOME", ""),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "USER": os.environ.get("USER", ""),
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+        }
+
+        if self.config.runner_type == "opencode":
+            env.update(
+                {
+                    "XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME", ""),
+                    "XDG_DATA_HOME": os.environ.get("XDG_DATA_HOME", ""),
+                    "XDG_STATE_HOME": os.environ.get("XDG_STATE_HOME", ""),
+                    "OPENCODE_CONFIG_DIR": os.environ.get("OPENCODE_CONFIG_DIR", ""),
+                }
+            )
+        else:
+            env["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
+
+        return env
+
+    def _extract_opencode_text(self, output: str) -> str:
+        """Extract readable text from OpenCode line-delimited JSON output."""
+        text_parts: List[str] = []
+
+        def append_content_parts(content: object) -> None:
+            if not isinstance(content, list):
+                return
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "text" and isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(event, dict):
+                continue
+
+            event_type = event.get("type")
+            if event_type == "text":
+                if isinstance(event.get("text"), str):
+                    text_parts.append(event["text"])
+            elif event_type == "content":
+                append_content_parts(event.get("content"))
+            elif event_type == "assistant_message":
+                message = event.get("message")
+                if isinstance(message, dict):
+                    append_content_parts(message.get("content"))
+
+        return "\n".join(text_parts).strip()
 
     async def run_claude(
         self,
@@ -129,6 +224,7 @@ class ClaudeRunner:
         """
         # Check cooldown before doing any work
         from .rate_limit_cooldown import get_cooldown_manager
+
         cooldown = get_cooldown_manager()
         if cooldown.is_active:
             state = cooldown.get_state()
@@ -160,22 +256,15 @@ class ClaudeRunner:
         if timeout is None:
             timeout = self.config.claude_timeout
 
-        # Build the Claude command (prompt is passed via stdin to avoid
+        # Build the runner command (prompt is passed via stdin to avoid
         # argument parsing issues when prompt starts with dashes)
-        cmd = [
-            self.config.claude_path,
-            "--print",
-            "--dangerously-skip-permissions",
-            "--verbose",
-            "--max-turns", str(self.config.claude_max_turns),
-            "--settings", '{"sandbox": {"enabled": false}}',
-        ]
+        cmd = self._build_runner_command(effective_project)
 
         logger.info(
             "claude_run_start",
             project=str(effective_project),
             prompt_length=len(prompt),
-            timeout=timeout
+            timeout=timeout,
         )
 
         last_error = ""
@@ -262,26 +351,18 @@ class ClaudeRunner:
                 elapsed_min = elapsed // 60
                 if progress_callback:
                     try:
-                        await progress_callback(
-                            f"Still working... ({elapsed_min} min elapsed)"
-                        )
+                        await progress_callback(f"Still working... ({elapsed_min} min elapsed)")
                     except Exception as e:
                         logger.warning("progress_callback_error", error=str(e))
 
         try:
-            # Minimal environment — only what Claude CLI needs
-            _subprocess_env = {
-                "HOME": os.environ.get("HOME", ""),
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "USER": os.environ.get("USER", ""),
-                "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-                "ANTHROPIC_API_KEY": os.environ.get("ANTHROPIC_API_KEY", ""),
-            }
+            _subprocess_env = self._build_subprocess_env()
 
             effective_cwd = project_path or self.current_project
 
             # Optionally wrap in Docker sandbox
             from .sandbox import build_sandbox_command, SandboxConfig, validate_docker_available
+
             sandbox_settings = self.config.sandbox_config
             if sandbox_settings.get("enabled", False):
                 available, docker_error = await asyncio.to_thread(validate_docker_available)
@@ -305,7 +386,7 @@ class ClaudeRunner:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=_subprocess_env
+                env=_subprocess_env,
             )
             self._active_processes.add(proc)
 
@@ -314,8 +395,7 @@ class ClaudeRunner:
 
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(input=prompt.encode("utf-8")),
-                    timeout=timeout
+                    proc.communicate(input=prompt.encode("utf-8")), timeout=timeout
                 )
             except asyncio.TimeoutError:
                 proc.kill()
@@ -352,7 +432,10 @@ class ClaudeRunner:
                 category = classify_error(return_code, output, errors)
 
                 combined_output = output + errors
-                if "prompt is too long" in combined_output or "Conversation too long" in combined_output:
+                if (
+                    "prompt is too long" in combined_output
+                    or "Conversation too long" in combined_output
+                ):
                     logger.warning("claude_token_limit", output=combined_output[:500])
                     return (
                         False,
@@ -381,14 +464,19 @@ class ClaudeRunner:
                 return False, f"Claude exited with code {return_code}", category
 
             result = output if output else errors
+            if self.config.runner_type == "opencode" and return_code == 0:
+                extracted = self._extract_opencode_text(output)
+                if extracted:
+                    result = extracted
 
             return True, result, ErrorCategory.TRANSIENT
 
         except FileNotFoundError:
-            logger.error("claude_not_found")
+            runner_name = "OpenCode" if self.config.runner_type == "opencode" else "Claude"
+            logger.error("claude_not_found", runner=runner_name.lower())
             return (
                 False,
-                "Claude CLI not found. Make sure it's installed and in PATH.",
+                f"{runner_name} CLI not found. Make sure it's installed and in PATH.",
                 ErrorCategory.INFRASTRUCTURE,
             )
 
