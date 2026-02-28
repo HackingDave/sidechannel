@@ -60,11 +60,5 @@ plugins/bluos_music/
 signal-data/
 signal-cli-config/
 
-# Local planning scratch files
-IDEAS.md
-PLAN.md
-
-# Local test artifacts
-test-output/
-*.test.log
-*.test.out
+# Patched signal-cli binary distribution (~237MB)
+signal-cli-[0-9]*/

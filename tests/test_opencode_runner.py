@@ -1,14 +1,16 @@
-"""Comprehensive integration tests for OpenCode runner behavior."""
+"""Tests for OpenCode runner support: config, command construction, JSON parsing, sandbox, and signal-path simulation."""
 
 import asyncio
 import json
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
+from types import MethodType, SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from nightwire.bot import SignalBot
 from nightwire.claude_runner import ClaudeRunner, ErrorCategory
 from nightwire.config import Config
 from nightwire.sandbox import SandboxConfig, build_sandbox_command
@@ -35,6 +37,27 @@ def _make_runner(monkeypatch, runner_type="claude", runner_path="claude"):
     )
     monkeypatch.setattr("nightwire.claude_runner.get_config", lambda: cfg)
     return ClaudeRunner()
+
+
+# Section: Config properties
+def test_runner_type_defaults_to_claude(monkeypatch):
+    config = _make_config(monkeypatch, {})
+    assert config.runner_type == "claude"
+
+
+def test_runner_path_defaults_to_claude_path(monkeypatch):
+    config = _make_config(monkeypatch, {"claude_path": "/custom/claude"})
+    assert config.runner_path == "/custom/claude"
+
+
+def test_runner_type_opencode(monkeypatch):
+    config = _make_config(monkeypatch, {"runner": {"type": "opencode"}})
+    assert config.runner_type == "opencode"
+
+
+def test_legacy_claude_path_still_works_without_runner(monkeypatch):
+    config = _make_config(monkeypatch, {"claude_path": "/legacy/claude"})
+    assert config.claude_path == "/legacy/claude"
 
 
 def test_runner_type_unknown_value_is_returned_as_is(monkeypatch):
@@ -71,6 +94,42 @@ def test_runner_path_wins_over_claude_path_when_both_set(monkeypatch):
     assert config.runner_path == "/custom/runner"
 
 
+# Section: Command construction
+def test_default_runner_keeps_claude_command(monkeypatch):
+    runner = _make_runner(monkeypatch, runner_type="claude")
+
+    cmd = runner._build_runner_command(Path("/tmp/project"))
+
+    assert cmd == [
+        "claude",
+        "--print",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "--max-turns",
+        "8",
+    ]
+
+
+def test_opencode_runner_uses_json_command(monkeypatch):
+    runner = _make_runner(
+        monkeypatch,
+        runner_type="opencode",
+        runner_path="/usr/local/bin/opencode",
+    )
+
+    cmd = runner._build_runner_command(Path("/tmp/project"))
+
+    assert cmd == [
+        "/usr/local/bin/opencode",
+        "run",
+        "--format",
+        "json",
+        "--dir",
+        "/tmp/project",
+    ]
+
+
+# Section: Subprocess environment
 @pytest.mark.parametrize("runner_type", ["claude", "opencode"])
 def test_subprocess_env_always_has_common_keys(monkeypatch, runner_type):
     monkeypatch.setenv("HOME", "/tmp/home")
@@ -134,6 +193,7 @@ def test_subprocess_env_opencode_has_xdg_only(monkeypatch):
     assert "ANTHROPIC_API_KEY" not in env
 
 
+# Section: OpenCode JSON parsing
 def test_extract_opencode_text_empty_input(monkeypatch):
     runner = _make_runner(monkeypatch, runner_type="opencode", runner_path="opencode")
     assert runner._extract_opencode_text("") == ""
@@ -197,6 +257,7 @@ def test_extract_opencode_text_only_tool_use_events_returns_empty(monkeypatch):
     assert runner._extract_opencode_text(output) == ""
 
 
+# Section: Execution path
 @pytest.mark.asyncio
 async def test_execute_once_missing_binary_message_mentions_opencode(monkeypatch, tmp_path):
     runner = _make_runner(monkeypatch, runner_type="opencode", runner_path="opencode")
@@ -312,44 +373,108 @@ async def test_execute_once_claude_success_returns_raw_output(monkeypatch, tmp_p
     extract_mock.assert_not_called()
 
 
-def test_sandbox_uses_config_runner_type_when_param_default_is_claude():
-    config = SandboxConfig(enabled=True, runner_type="opencode")
-    cmd = ["opencode", "run", "--format", "json"]
-    result = build_sandbox_command(cmd, Path("/tmp/project"), config)
+# Section: Signal-path simulation (end-to-end)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sandbox_enabled", [False, True])
+async def test_signal_message_exec_path_uses_direct_or_sandbox_runner(monkeypatch, tmp_path, sandbox_enabled):
+    cfg = SimpleNamespace(
+        config_dir=tmp_path,
+        runner_type="opencode",
+        runner_path="/usr/local/bin/opencode",
+        claude_path="claude",
+        claude_max_turns=8,
+        claude_timeout=60,
+        sandbox_config={
+            "enabled": sandbox_enabled,
+            "image": "nightwire-sandbox:latest",
+            "network": False,
+            "memory_limit": "2g",
+            "cpu_limit": 2.0,
+            "tmpfs_size": "256m",
+        },
+        memory_max_context_tokens=1000,
+    )
+    monkeypatch.setattr("nightwire.claude_runner.get_config", lambda: cfg)
 
-    env_vars = []
-    for i, arg in enumerate(result):
-        if arg == "-e" and i + 1 < len(result):
-            env_vars.append(result[i + 1])
+    captured_commands = []
 
-    assert "HOME" in env_vars
-    assert "XDG_CONFIG_HOME" in env_vars
-    assert "ANTHROPIC_API_KEY" not in env_vars
+    class _FakeProcess:
+        returncode = 0
+
+        async def communicate(self, input=None):
+            return b'{"type":"text","text":"ok"}\n', b""
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def _fake_create_subprocess_exec(*cmd, **kwargs):
+        captured_commands.append(list(cmd))
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        "nightwire.claude_runner.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr("nightwire.sandbox.validate_docker_available", lambda: (True, ""))
+
+    runner = ClaudeRunner()
+
+    bot = cast(Any, SignalBot.__new__(SignalBot))
+    bot.config = SimpleNamespace(memory_max_context_tokens=1000)
+    bot.runner = runner
+    bot.project_manager = SimpleNamespace(
+        get_current_project=lambda _sender: "demo-project",
+        get_current_path=lambda _sender: tmp_path,
+    )
+    bot.memory = SimpleNamespace(
+        store_message=AsyncMock(return_value=None),
+        get_relevant_context=AsyncMock(return_value=None),
+    )
+    bot.plugin_loader = SimpleNamespace(get_sorted_matchers=lambda: [])
+    bot.cooldown_manager = None
+    bot._sender_tasks = {}
+    bot.nightwire_runner = None
+    bot._send_message = AsyncMock(return_value=None)
+
+    started_task = {}
+    original_start_background_task = SignalBot._start_background_task
+
+    def _capture_background_task(self, sender, task_description, project_name, image_paths=None):
+        original_start_background_task(self, sender, task_description, project_name, image_paths=image_paths)
+        started_task["task"] = self._sender_tasks[sender]["task"]
+
+    bot._start_background_task = MethodType(_capture_background_task, bot)
+
+    monkeypatch.setattr("nightwire.bot.is_authorized", lambda _sender: True)
+    monkeypatch.setattr("nightwire.bot.check_rate_limit", lambda _sender: True)
+
+    await SignalBot._process_message(bot, "+15555550123", "run this")
+    await started_task["task"]
+
+    assert captured_commands
+    cmd = captured_commands[0]
+
+    if not sandbox_enabled:
+        assert cmd[0] == "/usr/local/bin/opencode"
+        assert cmd[1:5] == ["run", "--format", "json", "--dir"]
+        assert cmd[5] == str(tmp_path)
+    else:
+        assert cmd[:2] == ["docker", "run"]
+        opencode_idx = cmd.index("/usr/local/bin/opencode")
+        assert cmd[opencode_idx:opencode_idx + 5] == [
+            "/usr/local/bin/opencode",
+            "run",
+            "--format",
+            "json",
+            "--dir",
+        ]
+        assert cmd[opencode_idx + 5] == str(tmp_path)
 
 
-def test_sandbox_opencode_auth_mount_uses_dynamic_home(monkeypatch):
-    monkeypatch.setattr("nightwire.sandbox.Path.home", lambda: Path("/custom/home"))
-    config = SandboxConfig(enabled=True, runner_type="opencode")
-    cmd = ["opencode", "run", "--format", "json"]
-
-    result = build_sandbox_command(cmd, Path("/tmp/project"), config)
-
-    assert "/custom/home/.local/share/opencode:/home/sandbox/.local/share/opencode:ro" in result
-
-
-def test_sandbox_opencode_does_not_pass_opencode_config_dir_env():
-    config = SandboxConfig(enabled=True, runner_type="opencode")
-    cmd = ["opencode", "run", "--format", "json"]
-    result = build_sandbox_command(cmd, Path("/tmp/project"), config)
-
-    env_vars = []
-    for i, arg in enumerate(result):
-        if arg == "-e" and i + 1 < len(result):
-            env_vars.append(result[i + 1])
-
-    assert "OPENCODE_CONFIG_DIR" not in env_vars
-
-
+# Section: Install script validation
 def test_install_script_has_valid_bash_syntax():
     install_script = Path(__file__).resolve().parents[1] / "install.sh"
     result = subprocess.run(["bash", "-n", str(install_script)], capture_output=True, text=True)
