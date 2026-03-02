@@ -25,7 +25,7 @@ SIGNAL_CLI_VERSION="0.13.24"
 TURASA_VERSION="2.15.3_unofficial_138"
 TURASA_OLD="2.15.3_unofficial_137"
 LIBSIGNAL_VERSION="0.87.0"
-PATCH_VERSION="5"  # Bump when patch logic changes
+PATCH_VERSION="6"  # Bump when patch logic changes
 PATCH_REQUIRED=true
 
 # Turasa JARs to upgrade (groupId:artifactId)
@@ -260,7 +260,9 @@ if [ -f "$PATCH_SRC/ProvisioningApi.class" ] && [ -f "$final_jar" ]; then
     patch_jar "$final_jar" "$PATCH_SRC"
     echo -e " ${GREEN}done${NC}"
 else
-    warn "Patch files not found — provisioning patch not applied"
+    fail "ProvisioningApi patch files not found at $PATCH_SRC"
+    fail "Device linking will fail without this patch (Invalid ACI error)"
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
