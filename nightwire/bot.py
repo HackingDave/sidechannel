@@ -129,8 +129,9 @@ class SignalBot:
             logger.warning("insecure_signal_api_url", url=self.config.signal_api_url,
                            msg="Non-localhost Signal API should use HTTPS")
 
-        # Get the registered account
+        # Get the registered account (also runs signal-api health check)
         await self._get_account()
+        await self._check_signal_api_health()
 
         # Initialize memory system
         await self.memory.initialize()
@@ -403,6 +404,38 @@ class SignalBot:
             except Exception as e:
                 logger.error("accounts_request_error", error=str(e))
                 return
+
+    async def _check_signal_api_health(self):
+        """Check signal-api health and log diagnostic info at startup.
+
+        Queries /v1/about to verify mode, version, and connectivity.
+        Warns loudly if mode is not json-rpc (a common misconfiguration).
+        """
+        url = f"{self.config.signal_api_url}/v1/about"
+        try:
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                if resp.status == 200:
+                    info = await resp.json()
+                    mode = info.get("mode", "unknown")
+                    version = info.get("version", "unknown")
+                    logger.info(
+                        "signal_api_health",
+                        mode=mode,
+                        version=version,
+                        build=info.get("build"),
+                    )
+                    if mode != "json-rpc":
+                        logger.error(
+                            "signal_api_wrong_mode",
+                            mode=mode,
+                            expected="json-rpc",
+                            msg="Signal API must run in json-rpc mode for WebSocket message delivery. "
+                                "Set MODE=json-rpc in docker-compose.yml environment.",
+                        )
+                else:
+                    logger.warning("signal_api_health_failed", status=resp.status)
+        except Exception as e:
+            logger.warning("signal_api_health_error", error=str(e))
 
     def _split_message(self, message: str, max_length: int = 5000) -> list:
         """Split a long message into chunks that fit within Signal's limits.
@@ -730,6 +763,9 @@ class SignalBot:
         elif command == "cooldown":
             return await self._handle_cooldown_command(sender, args)
 
+        elif command == "diagnose":
+            return await self._handle_diagnose(sender)
+
         else:
             # Check plugin commands
             plugin_handler = self.plugin_loader.get_all_commands().get(command)
@@ -805,6 +841,7 @@ Memory:
         help_text += """
 
 System:
+  /diagnose - Run system health diagnostics
   /cooldown [status|clear|test] - Rate limit cooldown info/control
   /update - Apply a pending update (admin only)"""
 
@@ -824,6 +861,73 @@ AI Assistant:
                 help_text += f"\n  /{cmd} - {desc}"
 
         return help_text
+
+    async def _handle_diagnose(self, sender: str) -> str:
+        """Run system health diagnostics and return results."""
+        from . import __version__
+        lines = [f"Nightwire Diagnostics (v{__version__})"]
+        lines.append("=" * 35)
+
+        # 1. Signal API health
+        try:
+            url = f"{self.config.signal_api_url}/v1/about"
+            async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status == 200:
+                    info = await resp.json()
+                    mode = info.get("mode", "unknown")
+                    version = info.get("version", "unknown")
+                    mode_ok = mode == "json-rpc"
+                    lines.append(f"Signal API: OK (v{version}, mode={mode})")
+                    if not mode_ok:
+                        lines.append("  WARNING: Mode must be 'json-rpc' for message delivery!")
+                else:
+                    lines.append(f"Signal API: ERROR (HTTP {resp.status})")
+        except Exception as e:
+            lines.append(f"Signal API: UNREACHABLE ({e})")
+
+        # 2. WebSocket status
+        ws_frames = self._ws_frames_received
+        idle_secs = int(_time.monotonic() - self._last_ws_activity) if self._last_ws_activity else -1
+        lines.append(f"WebSocket frames received: {ws_frames}")
+        if idle_secs >= 0:
+            lines.append(f"Last WS activity: {idle_secs}s ago")
+        else:
+            lines.append("Last WS activity: never")
+
+        # 3. Account
+        lines.append(f"Account: {self.account or 'NOT SET'}")
+
+        # 4. Signal-cli patch status
+        install_dir = Path(self.config.config_dir).parent
+        patch_marker = install_dir / "signal-cli-0.13.24" / ".patched"
+        if patch_marker.exists():
+            patch_ver = patch_marker.read_text().strip()
+            lines.append(f"Signal-cli patches: Applied (v{patch_ver})")
+        else:
+            signal_cli_dir = install_dir / "signal-cli-0.13.24"
+            if signal_cli_dir.exists():
+                lines.append("Signal-cli patches: Directory exists but NOT patched")
+            else:
+                lines.append("Signal-cli patches: Not installed (using container default)")
+
+        # 5. Docker container status
+        try:
+            result = await asyncio.to_thread(
+                __import__('subprocess').run,
+                ["docker", "inspect", "--format", "{{.State.Status}}", "signal-api"],
+                capture_output=True, text=True, timeout=5
+            )
+            container_status = result.stdout.strip() if result.returncode == 0 else "not found"
+            lines.append(f"Docker signal-api: {container_status}")
+        except Exception:
+            lines.append("Docker signal-api: unknown (docker not available)")
+
+        # 6. Active tasks
+        active = sum(1 for s in self._sender_tasks.values()
+                     if s.get("task") and not s["task"].done())
+        lines.append(f"Active tasks: {active}")
+
+        return "\n".join(lines)
 
     async def _get_memory_context(self, sender: str, query: str,
                                    project_name: Optional[str] = None) -> Optional[str]:

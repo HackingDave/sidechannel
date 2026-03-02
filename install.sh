@@ -1301,8 +1301,8 @@ Type=simple
 WorkingDirectory=$INSTALL_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=-$CONFIG_DIR/.env
-ExecStartPre=/bin/bash -c '[ -f $INSTALL_DIR/.use-prepackaged-signal ] || ([ -x $INSTALL_DIR/scripts/apply-signal-patches.sh ] && $INSTALL_DIR/scripts/apply-signal-patches.sh $INSTALL_DIR) || true'
-ExecStartPre=/bin/bash -c 'CFILE=docker-compose.yml; [ -f $INSTALL_DIR/.use-prepackaged-signal ] && CFILE=docker-compose.prepackaged.yml; cd $INSTALL_DIR && docker compose -f \$CFILE up -d 2>/dev/null || docker start signal-api 2>/dev/null || true'
+ExecStartPre=/bin/bash -c '[ -f $INSTALL_DIR/.use-prepackaged-signal ] || ([ -x $INSTALL_DIR/scripts/apply-signal-patches.sh ] && $INSTALL_DIR/scripts/apply-signal-patches.sh $INSTALL_DIR) || echo "WARNING: signal-cli patches failed to apply" >&2'
+ExecStartPre=/bin/bash -c 'CFILE=docker-compose.yml; [ -f $INSTALL_DIR/.use-prepackaged-signal ] && CFILE=docker-compose.prepackaged.yml; [ "\$CFILE" = "docker-compose.yml" ] && [ ! -f $INSTALL_DIR/signal-cli-0.13.24/.patched ] && CFILE=docker-compose.unpatched.yml && echo "WARNING: Using unpatched signal-cli (patches not applied). Run: ./scripts/apply-signal-patches.sh" >&2; cd $INSTALL_DIR && docker compose -f \$CFILE up -d 2>/dev/null || docker start signal-api 2>/dev/null || true'
 ExecStart=$VENV_DIR/bin/python3 -m nightwire
 StandardOutput=append:$LOGS_DIR/nightwire.log
 StandardError=append:$LOGS_DIR/nightwire.log

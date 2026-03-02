@@ -1,0 +1,26 @@
+# Signal CLI REST API bridge for nightwire (unpatched fallback)
+#
+# Used when signal-cli patches have not been applied.
+# Does NOT mount the patched signal-cli directory.
+# The container runs its bundled signal-cli (may have protocol issues).
+#
+# Normally docker-compose.yml is used (with patches mounted).
+# This file is selected automatically by the startup script.
+
+services:
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./signal-data:/home/.local/share/signal-cli
+    environment:
+      - MODE=json-rpc
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/v1/about"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

@@ -363,14 +363,20 @@ class ClaudeRunner:
                         ErrorCategory.PERMANENT,
                     )
 
+                # Always log both stdout and stderr on failure for diagnostics
+                logger.error(
+                    "claude_error",
+                    return_code=return_code,
+                    stdout=output[:500] if output else "",
+                    stderr=errors[:500] if errors else "",
+                    category=category.value,
+                )
+
+                # Return the most informative error message available
                 if errors:
-                    logger.error(
-                        "claude_error",
-                        return_code=return_code,
-                        stderr=errors[:500],
-                        category=category.value,
-                    )
                     return False, f"Claude error: {errors[:1000]}", category
+                if output:
+                    return False, f"Claude error: {output[:1000]}", category
 
                 return False, f"Claude exited with code {return_code}", category
 
