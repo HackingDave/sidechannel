@@ -1384,16 +1384,23 @@ if [ "$SKIP_SIGNAL" = false ]; then
 
     # Clean stale signal-data from previous failed link attempts
     if [ -d "$SIGNAL_DATA_DIR/data" ]; then
-        # Check if accounts.json exists but is empty/corrupt
         ACCT_FILE="$SIGNAL_DATA_DIR/data/accounts.json"
+        STALE_DATA=false
         if [ -f "$ACCT_FILE" ]; then
-            # accounts.json with no registered accounts = stale from failed link
             acct_content=$(cat "$ACCT_FILE" 2>/dev/null || echo "")
+            # Empty/trivial accounts.json = stale from failed link
             if [ -z "$acct_content" ] || [ "$acct_content" = "[]" ] || [ "$acct_content" = "{}" ]; then
-                echo -e "  ${YELLOW}Cleaning stale signal data from previous attempt...${NC}"
-                rm -rf "$SIGNAL_DATA_DIR/data"
-                echo -e "  ${GREEN}✓${NC} Stale data removed"
+                STALE_DATA=true
             fi
+            # "multi-account" marker = corrupt data from bbernhard's multi-account mode
+            if echo "$acct_content" | grep -q "multi-account" 2>/dev/null; then
+                STALE_DATA=true
+            fi
+        fi
+        if [ "$STALE_DATA" = true ]; then
+            echo -e "  ${YELLOW}Cleaning stale signal data from previous attempt...${NC}"
+            rm -rf "$SIGNAL_DATA_DIR/data"
+            echo -e "  ${GREEN}✓${NC} Stale data removed"
         fi
     fi
 
