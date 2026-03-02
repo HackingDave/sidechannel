@@ -23,7 +23,7 @@ services:
       # Point Java to the native library in the mounted signal-cli
       - JAVA_OPTS=-Djava.library.path=/opt/signal-cli-0.13.23/lib
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/v1/about"]
+      test: ["CMD", "sh", "-c", "curl -sf http://127.0.0.1:8080/v1/about && curl -sf http://127.0.0.1:8080/v1/accounts"]
       interval: 60s
       timeout: 10s
       retries: 3

@@ -19,7 +19,7 @@ services:
     environment:
       - MODE=json-rpc
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/v1/about"]
+      test: ["CMD", "sh", "-c", "curl -sf http://127.0.0.1:8080/v1/about && curl -sf http://127.0.0.1:8080/v1/accounts"]
       interval: 60s
       timeout: 10s
       retries: 3

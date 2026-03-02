@@ -383,6 +383,9 @@ class SignalBot:
                             attempt=attempt,
                             max_attempts=max_attempts,
                         )
+                        if attempt < max_attempts:
+                            delay = min(base_delay * attempt, max_delay)
+                            await asyncio.sleep(delay)
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 if attempt < max_attempts:
                     delay = min(base_delay * attempt, max_delay)
