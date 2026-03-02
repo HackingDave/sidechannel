@@ -320,6 +320,40 @@ PYEOF
     return 1
 }
 
+# Spinner — shows a thinking animation while a background command runs
+# Usage: run_with_spinner "message" command arg1 arg2 ...
+run_with_spinner() {
+    local msg="$1"; shift
+    local spin_chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local log
+    log=$(mktemp)
+
+    # Run command in background, capture output
+    "$@" > "$log" 2>&1 &
+    local pid=$!
+
+    # Animate spinner
+    printf "  %s" "$msg"
+    local i=0
+    while kill -0 "$pid" 2>/dev/null; do
+        printf "\r  %s %s" "${spin_chars:i%${#spin_chars}:1}" "$msg"
+        i=$((i + 1))
+        sleep 0.1
+    done
+
+    # Check result
+    wait "$pid"
+    local rc=$?
+    if [ $rc -eq 0 ]; then
+        printf "\r  ${GREEN}✓${NC} %s\n" "$msg"
+    else
+        printf "\r  ${RED}✗${NC} %s\n" "$msg"
+        cat "$log" >&2
+    fi
+    rm -f "$log"
+    return $rc
+}
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -912,8 +946,7 @@ echo -e "  ${GREEN}✓${NC} Ready ($INSTALL_DIR)"
 echo -e "${BLUE}Setting up Python environment...${NC}"
 
 if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-    echo -e "  ${GREEN}✓${NC} Virtual environment created"
+    run_with_spinner "Creating virtual environment" python3 -m venv "$VENV_DIR"
 fi
 
 source "$VENV_DIR/bin/activate"
@@ -921,9 +954,7 @@ source "$VENV_DIR/bin/activate"
 if "$VENV_DIR/bin/pip" freeze 2>/dev/null | grep -q aiohttp; then
     echo -e "  ${GREEN}✓${NC} Dependencies already installed"
 else
-    pip install --upgrade pip -q
-    pip install -e "$INSTALL_DIR" -q
-    echo -e "  ${GREEN}✓${NC} Dependencies installed"
+    run_with_spinner "Installing dependencies (this may take a minute)" bash -c "pip install --upgrade pip -q && pip install -e '$INSTALL_DIR' -q"
 fi
 
 # Fix sqlite-vec on aarch64 — pip wheel v0.1.6 ships a 32-bit ARM binary
@@ -1176,10 +1207,7 @@ if [ "$DOCKER_OK" = true ]; then
         echo ""
     fi
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "  Building sandbox image (this may take a few minutes)..."
-        BUILD_LOG=$(mktemp)
-        if docker build -t nightwire-sandbox:latest -f "$INSTALL_DIR/Dockerfile.sandbox" "$INSTALL_DIR" > "$BUILD_LOG" 2>&1; then
-            rm -f "$BUILD_LOG"
+        if run_with_spinner "Building sandbox image (this may take a few minutes)" docker build -t nightwire-sandbox:latest -f "$INSTALL_DIR/Dockerfile.sandbox" "$INSTALL_DIR"; then
             echo -e "  ${GREEN}✓${NC} Sandbox image built (nightwire-sandbox:latest)"
 
             # Enable sandbox in settings.yaml — append if not already present
@@ -1198,10 +1226,6 @@ SANDBOXEOF
             fi
             echo -e "  ${GREEN}✓${NC} Sandbox enabled in config"
         else
-            echo -e "  ${YELLOW}!${NC} Failed to build sandbox image. Last 10 lines:"
-            tail -10 "$BUILD_LOG" 2>/dev/null | sed 's/^/    /'
-            rm -f "$BUILD_LOG"
-            echo ""
             echo "    You can retry later:"
             echo "    cd $INSTALL_DIR && docker build -t nightwire-sandbox:latest -f Dockerfile.sandbox ."
         fi
@@ -1258,16 +1282,9 @@ if [ "$DOCKER_OK" = true ] && [ "$SKIP_SIGNAL" = false ]; then
         if docker image inspect nightwire-signal:latest &>/dev/null; then
             echo -e "  ${GREEN}✓${NC} Pre-packaged image already built (nightwire-signal:latest)"
         else
-            echo -e "  Building pre-packaged Signal image (this may take a few minutes)..."
-            BUILD_LOG=$(mktemp)
-            if docker build -t nightwire-signal:latest -f "$INSTALL_DIR/Dockerfile.signal" "$INSTALL_DIR" > "$BUILD_LOG" 2>&1; then
-                rm -f "$BUILD_LOG"
+            if run_with_spinner "Building pre-packaged Signal image (this may take a few minutes)" docker build -t nightwire-signal:latest -f "$INSTALL_DIR/Dockerfile.signal" "$INSTALL_DIR"; then
                 echo -e "  ${GREEN}✓${NC} Pre-packaged image built (nightwire-signal:latest)"
             else
-                echo -e "  ${YELLOW}!${NC} Failed to build pre-packaged image. Last 10 lines:"
-                tail -10 "$BUILD_LOG" 2>/dev/null | sed 's/^/    /'
-                rm -f "$BUILD_LOG"
-                echo ""
                 echo "    Falling back to manual patching."
                 echo "    You can retry later:"
                 echo "    cd $INSTALL_DIR && docker build -t nightwire-signal:latest -f Dockerfile.signal ."
