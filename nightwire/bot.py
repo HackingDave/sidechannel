@@ -1614,7 +1614,12 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
 
                     # Only process if sent to ourselves (the bot's number)
                     if destination and destination == self.account:
-                        message_text = sent_message.get("message", "")
+                        sync_text = sent_message.get("message", "")
+                        # Ignore bot-generated responses (prevents feedback loop
+                        # between multiple linked bot instances)
+                        if sync_text and sync_text.startswith("[nightwire]"):
+                            return
+                        message_text = sync_text
                         attachments_list = sent_message.get("attachments") or []
                         source = self.account
 
