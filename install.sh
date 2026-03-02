@@ -30,7 +30,7 @@ sed_inplace() {
 wait_for_qrcode() {
     local max_wait=${1:-90}
     local elapsed=0
-    local qr_url="http://127.0.0.1:8080/v1/qrcodelink?device_name=nightwire"
+    local qr_url="http://127.0.0.1:8080/v1/qrcodelink?device_name=${DEVICE_NAME:-nightwire}"
     QR_READY=false
 
     echo -ne "  Waiting for Signal bridge to initialize"
@@ -160,12 +160,13 @@ prepare_link_tool() {
 }
 
 # Runs device linking with QR code display and retry logic.
-# Args: $1=signal_data_dir $2=remote_mode(true/false)
+# Args: $1=signal_data_dir $2=remote_mode(true/false) $3=device_name(default: nightwire)
 # Sets: LINKED_NUMBER on success
 # Returns 0 on success, 1 on failure.
 run_device_link() {
     local config_dir="$1"
     local remote_mode="$2"
+    local device_name="${3:-nightwire}"
     local max_attempts=3
     local attempt=0
 
@@ -186,7 +187,7 @@ run_device_link() {
         link_log=$(mktemp)
         JAVA_HOME="$JAVA_HOME" \
             SIGNAL_CLI_OPTS="-Djava.library.path=$SIGNAL_CLI_LIB_DIR" \
-            "$SIGNAL_CLI_CMD" --config "$config_dir" link --name nightwire \
+            "$SIGNAL_CLI_CMD" --config "$config_dir" link --name "$device_name" \
             > "$link_log" 2>&1 &
         LINK_PID=$!
 
@@ -214,7 +215,7 @@ run_device_link() {
         fi
 
         echo ""
-        echo -e "  ${GREEN}Link your phone to nightwire:${NC}"
+        echo -e "  ${GREEN}Link your phone to ${device_name}:${NC}"
         echo ""
 
         # Generate QR code in terminal
@@ -488,11 +489,47 @@ if [ "$UNINSTALL" = true ]; then
             echo -e "  ${GREEN}✓${NC} launchd service removed"
             REMOVED+=("launchd service")
         fi
+
+        # Unset launchctl environment variables that were injected during install
+        ENV_FILE="$CONFIG_DIR/.env"
+        if [ -f "$ENV_FILE" ]; then
+            while IFS='=' read -r key value; do
+                [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+                key=$(echo "$key" | xargs)
+                [ -n "$key" ] && launchctl unsetenv "$key" 2>/dev/null || true
+            done < "$ENV_FILE"
+            REMOVED+=("launchctl environment variables")
+        fi
     fi
 
-    # ── Step 2: Stop and remove Docker containers ─────────────────────────
+    # Kill any orphaned bot processes (if service stop didn't catch them)
+    BOT_PIDS=$(pgrep -f 'python.*-m nightwire' 2>/dev/null || true)
+    if [ -n "$BOT_PIDS" ]; then
+        echo -e "${BLUE}Stopping orphaned bot process(es)...${NC}"
+        echo "$BOT_PIDS" | xargs kill 2>/dev/null || true
+        sleep 2
+        # Force-kill if still running
+        BOT_PIDS=$(pgrep -f 'python.*-m nightwire' 2>/dev/null || true)
+        [ -n "$BOT_PIDS" ] && echo "$BOT_PIDS" | xargs kill -9 2>/dev/null || true
+        echo -e "  ${GREEN}✓${NC} Orphaned processes stopped"
+        REMOVED+=("orphaned processes")
+    fi
 
-    if command -v docker &> /dev/null; then
+    # ── Step 2: Stop and remove Docker containers and networks ──────────
+
+    if command -v docker &> /dev/null && docker info &> /dev/null 2>&1; then
+        # Use docker compose down to cleanly remove containers + networks
+        COMPOSE_DOWN=false
+        for cfile in docker-compose.yml docker-compose.prepackaged.yml docker-compose.unpatched.yml; do
+            if [ -f "$INSTALL_DIR/$cfile" ]; then
+                echo -e "${BLUE}Stopping Docker compose project...${NC}"
+                (cd "$INSTALL_DIR" && docker compose -f "$cfile" down 2>/dev/null) || true
+                COMPOSE_DOWN=true
+                break
+            fi
+        done
+
+        # Also remove any containers by name (in case compose file is missing)
         for CONTAINER in signal-api nightwire; do
             if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
                 echo -e "${BLUE}Stopping Docker container: ${CONTAINER}...${NC}"
@@ -501,6 +538,17 @@ if [ "$UNINSTALL" = true ]; then
                 echo -e "  ${GREEN}✓${NC} Container ${CONTAINER} removed"
                 REMOVED+=("container: $CONTAINER")
             fi
+        done
+
+        if [ "$COMPOSE_DOWN" = true ]; then
+            echo -e "  ${GREEN}✓${NC} Docker compose project stopped (containers + networks)"
+            REMOVED+=("docker compose project")
+        fi
+
+        # Clean up any orphaned compose networks
+        for net in $(docker network ls --filter name=nightwire --format '{{.Name}}' 2>/dev/null); do
+            docker network rm "$net" 2>/dev/null || true
+            REMOVED+=("docker network: $net")
         done
 
         # ── Step 3: Optionally remove Docker images ───────────────────────
@@ -605,6 +653,21 @@ if [ "$UNINSTALL" = true ]; then
             REMOVED+=("$f")
         fi
     done
+
+    # Python build artifacts
+    for d in "$INSTALL_DIR"/nightwire.egg-info "$INSTALL_DIR"/src/*.egg-info; do
+        if [ -d "$d" ]; then
+            rm -rf "$d"
+            REMOVED+=("$(basename "$d")")
+        fi
+    done
+    # Remove __pycache__ directories
+    pycache_count=$(find "$INSTALL_DIR" -type d -name '__pycache__' 2>/dev/null | wc -l)
+    if [ "$pycache_count" -gt 0 ]; then
+        find "$INSTALL_DIR" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+        echo -e "  ${GREEN}✓${NC} Removed $pycache_count __pycache__ directories"
+        REMOVED+=("__pycache__ directories")
+    fi
 
     # Disable loginctl linger if no other user services remain (Linux only)
     if [ "$(uname)" = "Linux" ] && command -v loginctl &> /dev/null; then
@@ -1311,6 +1374,29 @@ if [ "$SKIP_SIGNAL" = false ]; then
 
     mkdir -p "$SIGNAL_DATA_DIR"
 
+    # Device name prompt (shown in Signal's linked devices list)
+    DEVICE_NAME="nightwire"
+    if [ "$QUICK_MODE" != true ]; then
+        flush_stdin
+        read -p "  Device name [nightwire]: " DEVICE_NAME_INPUT
+        DEVICE_NAME="${DEVICE_NAME_INPUT:-nightwire}"
+    fi
+
+    # Clean stale signal-data from previous failed link attempts
+    if [ -d "$SIGNAL_DATA_DIR/data" ]; then
+        # Check if accounts.json exists but is empty/corrupt
+        ACCT_FILE="$SIGNAL_DATA_DIR/data/accounts.json"
+        if [ -f "$ACCT_FILE" ]; then
+            # accounts.json with no registered accounts = stale from failed link
+            acct_content=$(cat "$ACCT_FILE" 2>/dev/null || echo "")
+            if [ -z "$acct_content" ] || [ "$acct_content" = "[]" ] || [ "$acct_content" = "{}" ]; then
+                echo -e "  ${YELLOW}Cleaning stale signal data from previous attempt...${NC}"
+                rm -rf "$SIGNAL_DATA_DIR/data"
+                echo -e "  ${GREEN}✓${NC} Stale data removed"
+            fi
+        fi
+    fi
+
     # Ask about remote access for QR code scanning
     REMOTE_MODE=false
     if [ -n "$SSH_CONNECTION" ]; then
@@ -1338,7 +1424,7 @@ if [ "$SKIP_SIGNAL" = false ]; then
         docker rm -f signal-api 2>/dev/null || true
 
         # Run device linking
-        if run_device_link "$SIGNAL_DATA_DIR" "$REMOTE_MODE"; then
+        if run_device_link "$SIGNAL_DATA_DIR" "$REMOTE_MODE" "$DEVICE_NAME"; then
             SIGNAL_PAIRED=true
 
             if [ -n "$LINKED_NUMBER" ] && [ "$LINKED_NUMBER" != "$PHONE_NUMBER" ]; then
