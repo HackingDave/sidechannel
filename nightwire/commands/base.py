@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Dict, List, Optional
 
 import structlog
 
@@ -43,7 +43,7 @@ BUILTIN_COMMANDS = frozenset({
     "help", "projects", "select", "add", "remove", "new", "status",
     "ask", "do", "complex", "cancel", "summary",
     "cooldown", "update", "nightwire", "sidechannel",
-    "global",
+    "global", "diagnose",
     "remember", "recall", "history", "forget", "memories", "preferences",
     "prd", "story", "task", "tasks", "autonomous", "queue", "learnings",
 })
@@ -68,6 +68,8 @@ class BotContext:
     send_message: Callable[[str, str], Awaitable[None]]
     task_manager: "TaskManager"
     get_memory_context: Callable[..., Awaitable[Optional[str]]]
+    # Set after registry creation — used by /help <command>
+    registry: Optional["HandlerRegistry"] = None
     # nightwire_runner is Optional — legitimately None when feature disabled
     nightwire_runner: Optional["NightwireRunner"] = None
     # Deferred fields — set in start(), guarded by properties
@@ -112,6 +114,21 @@ class BotContext:
         return self._cooldown_manager is not None and self._cooldown_manager.is_active
 
 
+@dataclass
+class HelpMetadata:
+    """Per-command help information for ``/help <command>``.
+
+    Attributes:
+        description: One-line description of the command.
+        usage: Usage pattern (e.g. ``/select <project>``).
+        examples: List of Signal usage example strings.
+    """
+
+    description: str
+    usage: str
+    examples: List[str]
+
+
 class BaseCommandHandler(ABC):
     """Abstract base class for command handler groups.
 
@@ -135,6 +152,13 @@ class BaseCommandHandler(ABC):
         """
         ...
 
+    def get_help_metadata(self) -> Dict[str, HelpMetadata]:
+        """Return per-command help metadata for ``/help <command>``.
+
+        Override in subclasses to provide rich help text.
+        """
+        return {}
+
     def get_help_lines(self) -> str:
         """Return help text section for this handler group."""
         return ""
@@ -151,9 +175,12 @@ class HandlerRegistry:
 
     def __init__(self):
         self._handlers: Dict[str, Callable[..., Awaitable[Optional[str]]]] = {}
+        self._help_metadata: Dict[str, HelpMetadata] = {}
 
     def register(self, handler: BaseCommandHandler) -> None:
         """Register all commands from a BaseCommandHandler subclass.
+
+        Also merges any HelpMetadata from the handler.
 
         Args:
             handler: Handler instance whose get_commands() dict
@@ -167,6 +194,7 @@ class HandlerRegistry:
                     handler=type(handler).__name__,
                 )
             self._handlers[cmd_name] = method
+        self._help_metadata.update(handler.get_help_metadata())
 
     def register_external(
         self, commands: Dict[str, Callable[..., Awaitable[Optional[str]]]]
@@ -193,6 +221,10 @@ class HandlerRegistry:
     ) -> Optional[Callable[..., Awaitable[Optional[str]]]]:
         """Look up a handler for a command name."""
         return self._handlers.get(command)
+
+    def get_help(self, command: str) -> Optional[HelpMetadata]:
+        """Look up HelpMetadata for a command name."""
+        return self._help_metadata.get(command)
 
     @property
     def command_names(self) -> frozenset:

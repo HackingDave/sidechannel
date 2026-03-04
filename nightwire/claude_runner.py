@@ -157,12 +157,25 @@ class ClaudeRunner:
         # Per-invocation state: keyed by incrementing ID
         self._active_invocations: dict[int, _InvocationState] = {}
         self._next_invocation_id: int = 0
+        # Session ID from the most recent successful invocation.
+        # Caller-managed: read via last_session_id, store externally.
+        self._last_session_id: Optional[str] = None
+
+    @property
+    def last_session_id(self) -> Optional[str]:
+        """Session ID from the most recent successful invocation.
+
+        Only valid immediately after ``run_claude()`` returns successfully.
+        Returns None if the last invocation failed or had no session_id.
+        """
+        return self._last_session_id
 
     def _build_command(
         self,
         output_format: str = "json",
         json_schema: Optional[str] = None,
         verbose: bool = False,
+        resume_session_id: Optional[str] = None,
     ) -> list:
         """Build the ``claude -p`` command with appropriate flags.
 
@@ -170,6 +183,8 @@ class ClaudeRunner:
             output_format: Output format (``json`` or ``stream-json``).
             json_schema: Optional JSON schema string for structured output.
             verbose: Whether to include verbose event output.
+            resume_session_id: Optional session ID to resume a previous
+                conversation via ``--resume``.
 
         Returns:
             List of command-line arguments.
@@ -183,9 +198,14 @@ class ClaudeRunner:
             cmd.append("--verbose")
         if json_schema:
             cmd.extend(["--json-schema", json_schema])
+        if resume_session_id:
+            cmd.extend(["--resume", resume_session_id])
         max_turns = self.config.settings.get("claude_max_turns")
         if max_turns:
             cmd.extend(["--max-turns", str(max_turns)])
+        budget = self.config.claude_max_budget_usd
+        if budget is not None:
+            cmd.extend(["--max-budget-usd", str(budget)])
         # System prompt from config CLAUDE.md file
         guidelines = self.config.config_dir / "CLAUDE.md"
         if guidelines.exists():
@@ -317,6 +337,7 @@ class ClaudeRunner:
         max_retries: int = MAX_RETRIES,
         project_path: Optional[Path] = None,
         stream: bool = False,
+        resume_session_id: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """Run Claude with the given prompt, retrying on transient errors.
 
@@ -333,6 +354,8 @@ class ClaudeRunner:
             max_retries: Max retries for transient failures.
             project_path: Explicit project path override.
             stream: If True, stream text chunks via progress_callback.
+            resume_session_id: Optional CLI session ID to resume
+                a prior conversation via ``--resume``.
 
         Returns:
             Tuple of (success: bool, output: str).
@@ -372,7 +395,7 @@ class ClaudeRunner:
 
         inv_id, inv_state = self._new_invocation()
         try:
-            return await self._run_claude_inner(
+            result = await self._run_claude_inner(
                 prompt_str=prompt_str,
                 timeout=timeout,
                 progress_callback=progress_callback,
@@ -380,7 +403,17 @@ class ClaudeRunner:
                 stream=stream,
                 inv_state=inv_state,
                 effective_project=effective_project,
+                resume_session_id=resume_session_id,
             )
+            # Extract session_id before invocation cleanup
+            success, output = result
+            if success and inv_state._last_response:
+                self._last_session_id = (
+                    inv_state._last_response.get("session_id")
+                )
+            else:
+                self._last_session_id = None
+            return result
         finally:
             self._end_invocation(inv_id)
 
@@ -395,6 +428,7 @@ class ClaudeRunner:
         stream: bool,
         inv_state: _InvocationState,
         effective_project: Path,
+        resume_session_id: Optional[str] = None,
     ) -> Tuple[bool, str]:
         """Core retry loop, isolated with per-invocation state."""
         from .rate_limit_cooldown import get_cooldown_manager
@@ -436,6 +470,7 @@ class ClaudeRunner:
                         progress_callback=progress_callback,
                         inv_state=inv_state,
                         effective_project=effective_project,
+                        resume_session_id=resume_session_id,
                     )
                 )
             else:
@@ -446,6 +481,7 @@ class ClaudeRunner:
                         progress_callback=progress_callback,
                         inv_state=inv_state,
                         effective_project=effective_project,
+                        resume_session_id=resume_session_id,
                     )
                 )
 
@@ -502,6 +538,7 @@ class ClaudeRunner:
         inv_state: Optional[_InvocationState] = None,
         effective_project: Optional[Path] = None,
         json_schema: Optional[str] = None,
+        resume_session_id: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[ErrorCategory]]:
         """Execute a single CLI subprocess call (non-streaming).
 
@@ -512,6 +549,7 @@ class ClaudeRunner:
             inv_state: Per-invocation state for cancel support.
             effective_project: Working directory for the subprocess.
             json_schema: Optional JSON schema for structured output.
+            resume_session_id: Optional session ID for ``--resume``.
 
         Returns:
             Tuple of (success, output_or_error, error_category).
@@ -528,6 +566,7 @@ class ClaudeRunner:
         cmd = self._build_command(
             output_format="json",
             json_schema=json_schema,
+            resume_session_id=resume_session_id,
         )
 
         # Wrap in Docker sandbox if enabled
@@ -739,6 +778,7 @@ class ClaudeRunner:
         progress_callback: Callable[[str], Awaitable[None]],
         inv_state: _InvocationState,
         effective_project: Optional[Path] = None,
+        resume_session_id: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[ErrorCategory]]:
         """Execute CLI with streaming NDJSON output.
 
@@ -754,6 +794,7 @@ class ClaudeRunner:
 
         cmd = self._build_command(
             output_format="stream-json", verbose=True,
+            resume_session_id=resume_session_id,
         )
 
         # Wrap in Docker sandbox if enabled
@@ -962,6 +1003,9 @@ class ClaudeRunner:
                     ),
                     streaming=True,
                 )
+
+            # Stash full response for session_id extraction
+            inv_state._last_response = final_response
 
             if len(result_text) > MAX_SIGNAL_LENGTH:
                 result_text = (

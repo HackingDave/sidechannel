@@ -22,7 +22,7 @@ import structlog
 import yaml
 from dotenv import load_dotenv
 
-logger = structlog.get_logger("nightwire.bot")
+logger = structlog.get_logger("nightwire.config")
 
 
 class Config:
@@ -512,6 +512,22 @@ class Config:
         if configured:
             return Path(configured).expanduser()
         return Path(self.config_dir).parent / "data" / "attachments"
+
+    @property
+    def claude_max_budget_usd(self) -> Optional[float]:
+        """Maximum dollar amount for a single Claude CLI invocation.
+
+        Passed as ``--max-budget-usd`` flag. Default None (no cap).
+        Configurable via ``claude_max_budget_usd`` in settings.yaml.
+        """
+        val = self.settings.get("claude_max_budget_usd")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            logger.warning("config_invalid_budget", value=val)
+            return None
 
     @property
     def attachment_max_age_hours(self) -> int:

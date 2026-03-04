@@ -12,7 +12,7 @@ from typing import List, Optional
 
 import structlog
 
-from .base import BaseCommandHandler
+from .base import BaseCommandHandler, HelpMetadata
 
 logger = structlog.get_logger("nightwire.bot")
 
@@ -64,25 +64,122 @@ class CoreCommandHandler(BaseCommandHandler):
             "nightwire": self.handle_nightwire,
             "sidechannel": self.handle_nightwire,
             "global": self.handle_global,
+            "diagnose": self.handle_diagnose,
+        }
+
+    def get_help_metadata(self):
+        return {
+            "help": HelpMetadata(
+                "Show available commands",
+                "/help [command]",
+                ["/help", "/help select"],
+            ),
+            "projects": HelpMetadata(
+                "List all registered projects",
+                "/projects",
+                ["/projects"],
+            ),
+            "select": HelpMetadata(
+                "Select a project to work on",
+                "/select <project_name>",
+                ["/select myproject"],
+            ),
+            "status": HelpMetadata(
+                "Show current project, task, and system status",
+                "/status",
+                ["/status"],
+            ),
+            "add": HelpMetadata(
+                "Register an existing directory as a project",
+                "/add <name> [path] [description]",
+                ["/add myproject", "/add myproject /home/user/code"],
+            ),
+            "remove": HelpMetadata(
+                "Remove a project from the registry",
+                "/remove <project_name>",
+                ["/remove myproject"],
+            ),
+            "new": HelpMetadata(
+                "Create a new project directory and register it",
+                "/new <name> [description]",
+                ["/new myproject", "/new myproject A REST API"],
+            ),
+            "ask": HelpMetadata(
+                "Ask Claude a question about the current project",
+                "/ask <question>",
+                ["/ask How does auth work?"],
+            ),
+            "do": HelpMetadata(
+                "Execute a coding task with Claude",
+                "/do <task>",
+                ["/do Add input validation to login"],
+            ),
+            "complex": HelpMetadata(
+                "Break a large task into PRD with autonomous tasks",
+                "/complex <task>",
+                ["/complex Build user management API"],
+            ),
+            "cancel": HelpMetadata(
+                "Cancel the currently running background task",
+                "/cancel",
+                ["/cancel"],
+            ),
+            "summary": HelpMetadata(
+                "Generate a project summary",
+                "/summary",
+                ["/summary"],
+            ),
+            "cooldown": HelpMetadata(
+                "Check or control rate-limit cooldown",
+                "/cooldown [status|clear|test]",
+                ["/cooldown", "/cooldown clear", "/cooldown test"],
+            ),
+            "update": HelpMetadata(
+                "Apply a pending software update (admin only)",
+                "/update",
+                ["/update"],
+            ),
+            "nightwire": HelpMetadata(
+                "Ask the optional AI assistant",
+                "/nightwire <question>",
+                ["/nightwire What is the capital of France?"],
+            ),
+            "global": HelpMetadata(
+                "Run memory commands in cross-project scope",
+                "/global <command> [args]",
+                ["/global recall database", "/global memories"],
+            ),
+            "diagnose": HelpMetadata(
+                "Run health checks on all dependencies",
+                "/diagnose",
+                ["/diagnose"],
+            ),
         }
 
     # --- Core commands ---
 
     async def handle_help(self, sender: str, args: str) -> str:
-        """Show available commands and usage information.
+        """Show available commands, per-command help, and setup status.
 
         Signal usage::
 
             /help
+            /help select
+            /help diagnose
 
         Args:
             sender: Phone number or UUID of the message sender.
-            args: Unused.
+            args: Optional command name for detailed help.
 
         Returns:
-            Formatted help text listing all available commands.
+            General help text, or detailed per-command help.
         """
-        return self._build_help_text()
+        cmd = args.strip().lower() if args else ""
+        if cmd:
+            return self._get_command_help(cmd)
+        text = self._build_help_text()
+        text += "\n\n" + self._build_setup_status()
+        return text
 
     async def handle_projects(self, sender: str, args: str) -> str:
         """List all registered projects and highlight the currently selected one.
@@ -597,6 +694,32 @@ class CoreCommandHandler(BaseCommandHandler):
                 f"Unknown global command: {subcommand}\n\nUse /global for help."
             )
 
+    async def handle_diagnose(self, sender: str, args: str) -> str:
+        """Run health checks on all subsystem dependencies.
+
+        Signal usage::
+
+            /diagnose
+
+        Args:
+            sender: Phone number or UUID of the message sender.
+            args: Unused.
+
+        Returns:
+            Formatted diagnostic results with pass/fail indicators.
+        """
+        from ..diagnostics import run_all_checks
+
+        results = await run_all_checks(self.ctx.config)
+        lines = ["Diagnostics:"]
+        for name, (ok, detail, hint) in results.items():
+            icon = "+" if ok else "-"
+            line = f"  {icon} {name}: {detail}"
+            if not ok and hint:
+                line += f"\n      Hint: {hint}"
+            lines.append(line)
+        return "\n".join(lines)
+
     # --- Helper methods ---
 
     def _is_nightwire_query(self, message: str) -> bool:
@@ -635,6 +758,66 @@ class CoreCommandHandler(BaseCommandHandler):
                 error=str(e), exc_type=type(e).__name__,
             )
             return "The assistant encountered an error. Please try again later."
+
+    def _get_command_help(self, command: str) -> str:
+        """Return detailed help for a specific command."""
+        # Strip leading / if user typed /help /select
+        command = command.lstrip("/")
+        registry = self.ctx.registry
+        if registry:
+            meta = registry.get_help(command)
+            if meta:
+                lines = [
+                    f"/{command} — {meta.description}",
+                    f"\nUsage: {meta.usage}",
+                ]
+                if meta.examples:
+                    lines.append("\nExamples:")
+                    for ex in meta.examples:
+                        lines.append(f"  {ex}")
+                return "\n".join(lines)
+            # Command exists but no HelpMetadata (external command)
+            handler = registry.get(command)
+            if handler:
+                return (
+                    f"/{command} — Use /help for the full command list."
+                )
+        return f"Unknown command: /{command}\nUse /help to see available commands."
+
+    def _build_setup_status(self) -> str:
+        """Build a lightweight setup status section (sync, no network I/O)."""
+        lines = ["Status:"]
+        # Claude CLI — just check if path is configured or found
+        import shutil
+
+        claude_found = bool(shutil.which(self.ctx.config.claude_path))
+        if claude_found:
+            lines.append("  + Claude CLI: configured")
+        else:
+            lines.append("  - Claude CLI: not found")
+        # Memory/embeddings — check if package is findable (no actual import)
+        import importlib.util
+
+        if importlib.util.find_spec("sentence_transformers"):
+            lines.append("  + Embeddings: available")
+        else:
+            lines.append("  - Embeddings: not installed")
+        # sqlite-vec
+        if importlib.util.find_spec("sqlite_vec"):
+            lines.append("  + sqlite-vec: available")
+        else:
+            lines.append("  - sqlite-vec: not installed")
+        # Nightwire assistant
+        if self.ctx.nightwire_runner:
+            lines.append("  + Nightwire Assistant: enabled")
+        else:
+            lines.append("  - Nightwire Assistant: not configured")
+        # Docker sandbox
+        if self.ctx.config.sandbox_enabled:
+            lines.append("  + Docker Sandbox: enabled")
+        else:
+            lines.append("  - Docker Sandbox: disabled")
+        return "\n".join(lines)
 
     def _build_help_text(self) -> str:
         """Build the complete help text."""
@@ -677,7 +860,8 @@ Memory:
 
 System:
   /cooldown [status|clear|test] - Rate limit cooldown info/control
-  /update - Apply a pending update (admin only)"""
+  /update - Apply a pending update (admin only)
+  /diagnose - Run health checks on all dependencies"""
 
         if self.ctx.nightwire_runner:
             help_text = """nightwire Commands:

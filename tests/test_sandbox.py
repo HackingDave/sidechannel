@@ -21,7 +21,8 @@ def test_build_sandbox_command_wraps_with_docker():
     assert "run" in result
     assert "--rm" in result
     assert "--network=none" in result  # no network
-    assert any("/home/user/projects/myapp" in arg for arg in result)
+    # Use str(project_path) for cross-platform (backslash on Windows)
+    assert any(str(project_path) in arg for arg in result)
 
 
 def test_build_sandbox_command_disabled():

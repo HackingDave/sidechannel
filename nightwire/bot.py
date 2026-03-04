@@ -171,6 +171,7 @@ class SignalBot:
 
         # Handler registry — core + memory registered now, autonomous in start()
         self._registry = HandlerRegistry()
+        self._bot_context.registry = self._registry
         self._core_handler = CoreCommandHandler(self._bot_context)
         self._registry.register(self._core_handler)
         self._registry.register_external(
@@ -290,6 +291,25 @@ class SignalBot:
             "queue": self.autonomous_commands.handle_queue,
             "learnings": self.autonomous_commands.handle_learnings,
         })
+
+        # Startup diagnostics — log feature availability
+        try:
+            from .diagnostics import run_all_checks
+
+            diag_results = await run_all_checks(self.config)
+            for name, (ok, detail, hint) in diag_results.items():
+                if ok:
+                    logger.info(
+                        "startup_check_pass",
+                        check=name, detail=detail,
+                    )
+                else:
+                    logger.warning(
+                        "startup_check_fail",
+                        check=name, detail=detail, hint=hint,
+                    )
+        except Exception as exc:
+            logger.warning("startup_diagnostics_error", error=str(exc))
 
         logger.info("bot_started", account=self.account)
 

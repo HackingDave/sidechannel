@@ -24,8 +24,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/hackingdave/nightwire"
-"Bug Tracker" = "https://github.com/hackingdave/nightwire/issues"
+Repository = "https://github.com/offsecginger/nightwire"
+"Bug Tracker" = "https://github.com/offsecginger/nightwire/issues"
 
 [project.scripts]
 nightwire = "nightwire.main:run"

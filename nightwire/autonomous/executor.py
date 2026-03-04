@@ -306,7 +306,7 @@ class TaskExecutor:
         """
         start_time = datetime.now()
 
-        # Detect effort level
+        # Detect effort level (informational only — no CLI flag post-M7)
         effort = get_effort_for_task(task)
         task_type = detect_task_type(task)
 

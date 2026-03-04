@@ -33,7 +33,11 @@ def _find_subprocess_calls(filepath: Path):
             if func_name in ("run", "call", "Popen", "check_output", "check_call",
                              "create_subprocess_shell"):
                 for kw in node.keywords:
-                    if kw.arg == "shell" and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    if (
+                        kw.arg == "shell"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is True
+                    ):
                         issues.append(
                             f"{filepath}:{node.lineno}: subprocess with shell=True"
                         )

@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import structlog
 
-logger = structlog.get_logger("nightwire.bot")
+logger = structlog.get_logger("nightwire.autonomous")
 
 # Thresholds
 MAX_MEMORY_PERCENT = 90  # Don't spawn if memory > 90%

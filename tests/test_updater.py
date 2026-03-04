@@ -321,7 +321,6 @@ class TestAutoUpdater:
         updater.check_interval = 0.01  # Fast for testing
         call_count = 0
 
-        original_check = updater.check_for_updates
         async def counting_check():
             nonlocal call_count
             call_count += 1

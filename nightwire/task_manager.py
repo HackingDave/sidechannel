@@ -60,6 +60,10 @@ class TaskManager:
         self._send_message = send_message
         self._get_memory_context = get_memory_context
         self._sender_tasks: Dict[str, dict] = {}
+        # Per-user+project session IDs for Claude CLI --resume.
+        # Keys are "sender:project_name", values are CLI session_id.
+        # Ephemeral — lost on bot restart.
+        self._session_ids: Dict[str, str] = {}
         # Set after start() — deferred initialization
         self.autonomous_manager = None
 
@@ -127,13 +131,34 @@ class TaskManager:
 
                 task_state["step"] = "Claude executing task..."
                 task_project_path = self.project_manager.get_current_path(sender)
+                # Session key for --resume continuity
+                session_key = (
+                    f"{sender}:{project_name}"
+                    if project_name
+                    else None
+                )
+                resume_id = (
+                    self._session_ids.get(session_key)
+                    if session_key
+                    else None
+                )
                 success, response = await self.runner.run_claude(
                     effective_description,
                     progress_callback=progress_cb,
                     memory_context=memory_context,
                     project_path=task_project_path,
                     stream=True,
+                    resume_session_id=resume_id,
                 )
+                # Store session_id for next invocation
+                if (
+                    success
+                    and session_key
+                    and self.runner.last_session_id
+                ):
+                    self._session_ids[session_key] = (
+                        self.runner.last_session_id
+                    )
 
                 # Store response to memory (fire-and-forget)
                 t = asyncio.create_task(

@@ -14,7 +14,7 @@ import structlog
 
 from .config import get_config
 
-logger = structlog.get_logger("nightwire.bot")
+logger = structlog.get_logger("nightwire.security")
 
 # Default configuration values
 DEFAULT_COOLDOWN_MINUTES = 60

@@ -15,4 +15,4 @@ sentence-transformers>=2.2.0
 sqlite-vec>=0.1.1
 
 # Resource Utilization
-psutil
+psutil>=5.9

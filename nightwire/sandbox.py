@@ -13,20 +13,18 @@ Key classes:
 """
 
 import subprocess
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
 import structlog
 
-warnings.warn(
-    "nightwire.sandbox is optional — enable via sandbox.enabled in settings.yaml",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
 logger = structlog.get_logger("nightwire.claude")
+
+logger.debug(
+    "sandbox_module_loaded",
+    msg="sandbox is optional — enable via sandbox.enabled in settings.yaml",
+)
 
 
 @dataclass

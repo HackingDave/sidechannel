@@ -304,7 +304,10 @@ class TestRunClaudeCooldown:
             user_message="Cooldown active"
         )
 
-        with patch("nightwire.rate_limit_cooldown.get_cooldown_manager", return_value=mock_cooldown):
+        with patch(
+            "nightwire.rate_limit_cooldown.get_cooldown_manager",
+            return_value=mock_cooldown,
+        ):
             success, output = await runner.run_claude("test prompt")
 
         assert success is False
@@ -329,7 +332,10 @@ class TestRunClaudeCooldown:
         mock_cooldown = MagicMock()
         mock_cooldown.is_active = False
 
-        with patch("nightwire.rate_limit_cooldown.get_cooldown_manager", return_value=mock_cooldown):
+        with patch(
+            "nightwire.rate_limit_cooldown.get_cooldown_manager",
+            return_value=mock_cooldown,
+        ):
             success, output = await runner.run_claude("test prompt")
 
         assert success is False
