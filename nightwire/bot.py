@@ -1314,15 +1314,16 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
             await update_step("Queuing tasks for execution...")
 
             # Queue all tasks
-            queued = await self.autonomous_manager.queue_prd(prd.id)
+            await self.autonomous_manager.queue_prd(prd.id)
 
             # Start the autonomous loop if not running
             status = await self.autonomous_manager.get_loop_status()
-            if not status.is_running:
+            was_running = status.is_running
+            if not was_running:
                 await self.autonomous_manager.start_loop()
 
             # Return summary
-            loop_state = "Started" if not status.is_running else "Running"
+            loop_state = "Running" if was_running else "Started"
             return (
                 f"PRD #{prd.id}: {prd.title}\n\n"
                 f"Stories:\n" + "\n".join(story_summaries) + "\n\n"

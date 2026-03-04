@@ -382,7 +382,7 @@ class ClaudeRunner:
 
             result = output if output else errors
 
-            return True, result, ErrorCategory.PERMANENT
+            return True, result, ErrorCategory.TRANSIENT
 
         except FileNotFoundError:
             logger.error("claude_not_found")

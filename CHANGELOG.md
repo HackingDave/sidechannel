@@ -5,6 +5,15 @@ All notable changes to nightwire (formerly sidechannel) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.14] - 2026-03-04
+
+### Fixed
+- Installer uses `python3` instead of `python` for sqlite-vec aarch64 fix and macOS launchd plist (prevents silent failures)
+- Removed dead `shift` statements in installer argument parsing loop
+- Autonomous loop status label now correctly shows "Started" vs "Running" (was using stale status object)
+- Removed unused `queued` variable in PRD queue handler
+- Claude runner returns `TRANSIENT` instead of `PERMANENT` error category on success
+
 ## [2.5.13] - 2026-03-04
 
 ### Changed

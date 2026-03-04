@@ -331,27 +331,21 @@ for arg in "$@"; do
     case $arg in
         --skip-signal)
             SKIP_SIGNAL=true
-            shift
             ;;
         --skip-systemd)
             SKIP_SYSTEMD=true
-            shift
             ;;
         --uninstall)
             UNINSTALL=true
-            shift
             ;;
         --restart)
             RESTART=true
-            shift
             ;;
         --quick)
             QUICK_MODE=true
-            shift
             ;;
         --phone=*)
             PHONE_NUMBER_ARG="${arg#*=}"
-            shift
             ;;
         --help|-h)
             echo "Usage: ./install.sh [options]"
@@ -960,7 +954,7 @@ fi
 # for the "aarch64" platform. Replace it with the proper 64-bit build.
 ARCH=$(uname -m)
 if [ "$ARCH" = "aarch64" ]; then
-    VEC_SO=$(python -c "import sqlite_vec; print(sqlite_vec.loadable_path())" 2>/dev/null)
+    VEC_SO=$(python3 -c "import sqlite_vec; print(sqlite_vec.loadable_path())" 2>/dev/null)
     if [ -n "$VEC_SO" ] && file "${VEC_SO}.so" 2>/dev/null | grep -q "32-bit"; then
         echo -e "  ${YELLOW}⚠${NC}  sqlite-vec pip wheel has wrong architecture, fixing..."
         VEC_URL="https://github.com/asg017/sqlite-vec/releases/download/v0.1.7-alpha.10/sqlite-vec-0.1.7-alpha.10-loadable-linux-aarch64.tar.gz"
@@ -1468,7 +1462,7 @@ EOF
     <string>com.nightwire.bot</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$VENV_DIR/bin/python</string>
+        <string>$VENV_DIR/bin/python3</string>
         <string>-m</string>
         <string>nightwire</string>
     </array>
