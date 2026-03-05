@@ -382,6 +382,7 @@ class ClaudeRunner:
                     memory_limit=sandbox_settings.get("memory_limit", "2g"),
                     cpu_limit=sandbox_settings.get("cpu_limit", 2.0),
                     tmpfs_size=sandbox_settings.get("tmpfs_size", "256m"),
+                    runner_type=self.config.runner_type,
                 )
                 cmd = build_sandbox_command(list(cmd), effective_cwd, sandbox_cfg)
 
