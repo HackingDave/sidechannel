@@ -379,6 +379,7 @@ UNINSTALL=false
 RESTART=false
 QUICK_MODE=false
 NO_PREPACKAGED=false
+DEBUG_MODE=false
 PHONE_NUMBER_ARG=""
 
 # Parse arguments
@@ -408,6 +409,10 @@ for arg in "$@"; do
             NO_PREPACKAGED=true
             shift
             ;;
+        --debug)
+            DEBUG_MODE=true
+            shift
+            ;;
         --phone=*)
             PHONE_NUMBER_ARG="${arg#*=}"
             shift
@@ -421,6 +426,7 @@ for arg in "$@"; do
             echo "  --skip-signal      Skip Signal pairing (configure later)"
             echo "  --skip-systemd     Skip service installation"
             echo "  --no-prepackaged   Use host-side patching instead of pre-built Docker image"
+            echo "  --debug            Set nightwire to DEBUG log level"
             echo "  --uninstall        Remove nightwire service and containers"
             echo "  --restart          Restart the nightwire service"
             echo "  --help, -h         Show this help message"
@@ -1549,7 +1555,7 @@ Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=-$CONFIG_DIR/.env
 ExecStartPre=/bin/bash -c '[ -f $INSTALL_DIR/.use-prepackaged-signal ] || ([ -x $INSTALL_DIR/scripts/apply-signal-patches.sh ] && $INSTALL_DIR/scripts/apply-signal-patches.sh $INSTALL_DIR) || echo "WARNING: signal-cli patches failed to apply" >&2'
 ExecStartPre=/bin/bash -c 'CFILE=docker-compose.yml; [ -f $INSTALL_DIR/.use-prepackaged-signal ] && CFILE=docker-compose.prepackaged.yml; [ "\$CFILE" = "docker-compose.yml" ] && [ ! -f $INSTALL_DIR/signal-cli-0.13.24/.patched ] && CFILE=docker-compose.unpatched.yml && echo "WARNING: Using unpatched signal-cli (patches not applied). Run: ./scripts/apply-signal-patches.sh" >&2; cd $INSTALL_DIR && docker compose -f \$CFILE up -d 2>/dev/null || docker start signal-api 2>/dev/null || true'
-ExecStart=$VENV_DIR/bin/python3 -m nightwire
+ExecStart=$VENV_DIR/bin/python3 -m nightwire$([ "$DEBUG_MODE" = true ] && echo " --debug")
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
@@ -1607,7 +1613,7 @@ EOF
     <array>
         <string>$VENV_DIR/bin/python</string>
         <string>-m</string>
-        <string>nightwire</string>
+        <string>nightwire</string>$([ "$DEBUG_MODE" = true ] && printf '\n        <string>--debug</string>')
     </array>
     <key>WorkingDirectory</key>
     <string>$INSTALL_DIR</string>
