@@ -171,6 +171,10 @@ class VerificationAgent:
                     approved=result.passed, issues_count=len(result.issues),
                 )
 
+                # Attach usage data from runner before close
+                if runner.last_usage:
+                    result.usage_data = runner.last_usage.copy()
+
                 # Cache the result for this diff with TTL timestamp
                 self._cache[diff_hash] = {'result': result, '_cached_at': time.time()}
 

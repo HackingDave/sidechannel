@@ -533,6 +533,42 @@ class Config:
             return None
 
     @property
+    def usage_daily_budget_usd(self) -> Optional[float]:
+        """Daily spending budget in USD. Alert at 80%, block at 100%.
+
+        Configurable via ``usage.daily_budget_usd`` in settings.yaml.
+        Default None (no daily cap).
+        """
+        usage = self.settings.get("usage", {})
+        if not isinstance(usage, dict):
+            return None
+        val = usage.get("daily_budget_usd")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def usage_weekly_budget_usd(self) -> Optional[float]:
+        """Weekly spending budget in USD. Alert at 80%, block at 100%.
+
+        Configurable via ``usage.weekly_budget_usd`` in settings.yaml.
+        Default None (no weekly cap).
+        """
+        usage = self.settings.get("usage", {})
+        if not isinstance(usage, dict):
+            return None
+        val = usage.get("weekly_budget_usd")
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return None
+
+    @property
     def attachment_max_age_hours(self) -> int:
         """Max age for attachment files in hours before cleanup deletes them.
 

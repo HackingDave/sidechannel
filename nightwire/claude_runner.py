@@ -70,6 +70,7 @@ class _InvocationState:
     process: Optional[asyncio.subprocess.Process] = None
     cancelled: bool = False
     _last_response: Optional[dict] = None
+    _last_usage: Optional[dict] = None
 
 
 def classify_error(
@@ -160,6 +161,10 @@ class ClaudeRunner:
         # Session ID from the most recent successful invocation.
         # Caller-managed: read via last_session_id, store externally.
         self._last_session_id: Optional[str] = None
+        # Usage data from the most recent invocation (any outcome).
+        # Race note: concurrent calls may overwrite. Callers should
+        # read immediately after run_claude() returns.
+        self._last_usage: Optional[dict] = None
 
     @property
     def last_session_id(self) -> Optional[str]:
@@ -169,6 +174,19 @@ class ClaudeRunner:
         Returns None if the last invocation failed or had no session_id.
         """
         return self._last_session_id
+
+    @property
+    def last_usage(self) -> Optional[dict]:
+        """Usage data from the most recent invocation.
+
+        Returns a dict with keys: ``input_tokens``, ``output_tokens``,
+        ``model``, ``cost_usd``. Returns None if no invocation has
+        completed or the last invocation produced no usage data.
+
+        Race note: read immediately after ``run_claude()`` returns —
+        concurrent invocations may overwrite this value.
+        """
+        return self._last_usage
 
     def _build_command(
         self,
@@ -407,7 +425,7 @@ class ClaudeRunner:
                 effective_project=effective_project,
                 resume_session_id=resume_session_id,
             )
-            # Extract session_id before invocation cleanup
+            # Extract session_id and usage before invocation cleanup
             success, output = result
             if success and inv_state._last_response:
                 self._last_session_id = (
@@ -415,6 +433,8 @@ class ClaudeRunner:
                 )
             else:
                 self._last_session_id = None
+            # Always propagate usage (even on failure)
+            self._last_usage = inv_state._last_usage
             return result
         finally:
             self._end_invocation(inv_id)
@@ -716,6 +736,14 @@ class ClaudeRunner:
                 num_turns=response.get("num_turns", 1),
             )
 
+            # Stash usage data for caller to record
+            inv_state._last_usage = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "model": model_name,
+                "cost_usd": response.get("total_cost_usd", 0),
+            }
+
             result = response.get("result", "")
 
             # Stash full response for structured output parsing
@@ -999,6 +1027,20 @@ class ClaudeRunner:
                     streaming=True,
                 )
 
+                # Stash usage data for caller to record
+                inv_state._last_usage = {
+                    "input_tokens": usage.get(
+                        "input_tokens", 0
+                    ),
+                    "output_tokens": usage.get(
+                        "output_tokens", 0
+                    ),
+                    "model": model_name,
+                    "cost_usd": final_response.get(
+                        "total_cost_usd", 0
+                    ),
+                }
+
             # Stash full response for session_id extraction
             inv_state._last_response = final_response
 
@@ -1079,7 +1121,7 @@ class ClaudeRunner:
 
         inv_id, inv_state = self._new_invocation()
         try:
-            return await self._run_structured_inner(
+            result = await self._run_structured_inner(
                 prompt_str=prompt_str,
                 timeout=timeout,
                 json_schema=json_schema,
@@ -1088,6 +1130,9 @@ class ClaudeRunner:
                 inv_state=inv_state,
                 effective_project=effective_project,
             )
+            # Propagate usage (even on failure)
+            self._last_usage = inv_state._last_usage
+            return result
         finally:
             self._end_invocation(inv_id)
 

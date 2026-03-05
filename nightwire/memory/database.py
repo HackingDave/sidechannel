@@ -41,7 +41,7 @@ from .models import (
 logger = structlog.get_logger("nightwire.memory")
 
 # Schema version for migrations
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class DatabaseConnection:
@@ -222,6 +222,9 @@ class DatabaseConnection:
         if current_version < 4:
             self._migrate_to_v4(cursor)
 
+        if current_version < 5:
+            self._migrate_to_v5(cursor)
+
         # Update schema version
         cursor.execute(
             "INSERT OR REPLACE INTO schema_version (version) VALUES (?)",
@@ -401,6 +404,46 @@ class DatabaseConnection:
                 pass  # Column already exists
 
         logger.info("schema_v4_migration_complete")
+
+    def _migrate_to_v5(self, cursor: sqlite3.Cursor) -> None:
+        """Migrate to schema version 5 - add usage tracking table."""
+        logger.info("migrating_to_schema_v5")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS usage_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone_number TEXT NOT NULL,
+                project_name TEXT,
+                model TEXT NOT NULL DEFAULT 'unknown',
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cost_usd REAL DEFAULT 0.0,
+                source TEXT NOT NULL CHECK(source IN (
+                    'do', 'ask', 'complex', 'summary', 'autonomous',
+                    'verification', 'haiku', 'nightwire'
+                )),
+                session_id TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # -- No FK on phone_number: analytics table, referential integrity
+        # -- not critical. REAL for cost_usd matches CLI's total_cost_usd
+        # -- precision; acceptable for analytics.
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_usage_phone_time
+            ON usage_records(phone_number, timestamp DESC)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_usage_phone_project
+            ON usage_records(phone_number, project_name)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_usage_source
+            ON usage_records(source, timestamp DESC)
+        """)
+
+        logger.info("schema_v5_migration_complete")
 
     @property
     def has_vector_search(self) -> bool:
@@ -1120,6 +1163,231 @@ class DatabaseConnection:
             )
             for row in rows
         ]
+
+    # Usage tracking operations
+
+    async def record_usage(
+        self,
+        phone_number: str,
+        source: str,
+        model: str = "unknown",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cost_usd: float = 0.0,
+        project_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """Record a usage entry for token/cost tracking.
+
+        Args:
+            phone_number: User's phone number.
+            source: One of 'do', 'ask', 'complex', 'summary',
+                'autonomous', 'verification', 'haiku', 'nightwire'.
+            model: Model identifier.
+            input_tokens: Input/prompt token count.
+            output_tokens: Output/completion token count.
+            cost_usd: Cost in USD (float, matches CLI precision).
+            project_name: Project context.
+            session_id: CLI session ID, if available.
+
+        Returns:
+            The usage record row ID.
+        """
+        return await asyncio.to_thread(
+            self._record_usage_sync,
+            phone_number, source, model, input_tokens,
+            output_tokens, cost_usd, project_name, session_id,
+        )
+
+    def _record_usage_sync(
+        self,
+        phone_number: str,
+        source: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: float,
+        project_name: Optional[str],
+        session_id: Optional[str],
+    ) -> int:
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.execute("""
+                INSERT INTO usage_records
+                (phone_number, project_name, model, input_tokens,
+                 output_tokens, cost_usd, source, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                phone_number, project_name, model, input_tokens,
+                output_tokens, cost_usd, source, session_id,
+            ))
+            self._conn.commit()
+            return cursor.lastrowid
+
+    async def get_usage_summary(
+        self,
+        phone_number: str,
+        days: Optional[int] = None,
+    ) -> dict:
+        """Get usage summary for a user, optionally filtered by time.
+
+        Args:
+            phone_number: User's phone number.
+            days: If set, only include records from the last N days.
+                None means all time.
+
+        Returns:
+            Dict with keys: input_tokens, output_tokens, cost_usd,
+            request_count.
+        """
+        return await asyncio.to_thread(
+            self._get_usage_summary_sync, phone_number, days,
+        )
+
+    def _get_usage_summary_sync(
+        self, phone_number: str, days: Optional[int],
+    ) -> dict:
+        cursor = self._conn.cursor()
+        query = """
+            SELECT COALESCE(SUM(input_tokens), 0) as input_tokens,
+                   COALESCE(SUM(output_tokens), 0) as output_tokens,
+                   COALESCE(SUM(cost_usd), 0.0) as cost_usd,
+                   COUNT(*) as request_count
+            FROM usage_records
+            WHERE phone_number = ?
+        """
+        params: list = [phone_number]
+        if days is not None:
+            if days == 0:
+                query += " AND timestamp >= datetime('now', 'start of day')"
+            else:
+                query += " AND timestamp >= datetime('now', ?)"
+                params.append(f"-{days} days")
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return {
+            "input_tokens": row["input_tokens"],
+            "output_tokens": row["output_tokens"],
+            "cost_usd": row["cost_usd"],
+            "request_count": row["request_count"],
+        }
+
+    async def get_usage_by_project(
+        self,
+        phone_number: str,
+        days: Optional[int] = None,
+    ) -> List[dict]:
+        """Get per-project usage breakdown for a user.
+
+        Args:
+            phone_number: User's phone number.
+            days: If set, only include records from the last N days.
+
+        Returns:
+            List of dicts with project_name, input_tokens,
+            output_tokens, cost_usd, request_count.
+        """
+        return await asyncio.to_thread(
+            self._get_usage_by_project_sync, phone_number, days,
+        )
+
+    def _get_usage_by_project_sync(
+        self, phone_number: str, days: Optional[int],
+    ) -> List[dict]:
+        cursor = self._conn.cursor()
+        query = """
+            SELECT COALESCE(project_name, '(no project)') as project_name,
+                   COALESCE(SUM(input_tokens), 0) as input_tokens,
+                   COALESCE(SUM(output_tokens), 0) as output_tokens,
+                   COALESCE(SUM(cost_usd), 0.0) as cost_usd,
+                   COUNT(*) as request_count
+            FROM usage_records
+            WHERE phone_number = ?
+        """
+        params: list = [phone_number]
+        if days is not None:
+            if days == 0:
+                query += " AND timestamp >= datetime('now', 'start of day')"
+            else:
+                query += " AND timestamp >= datetime('now', ?)"
+                params.append(f"-{days} days")
+        query += " GROUP BY project_name ORDER BY cost_usd DESC"
+        cursor.execute(query, params)
+        return [
+            {
+                "project_name": row["project_name"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "cost_usd": row["cost_usd"],
+                "request_count": row["request_count"],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    async def get_usage_all_users(
+        self, days: Optional[int] = None,
+    ) -> List[dict]:
+        """Get usage summary for all users (admin query).
+
+        Args:
+            days: If set, only include records from the last N days.
+
+        Returns:
+            List of dicts with phone_number, input_tokens,
+            output_tokens, cost_usd, request_count.
+        """
+        return await asyncio.to_thread(
+            self._get_usage_all_users_sync, days,
+        )
+
+    def _get_usage_all_users_sync(self, days: Optional[int]) -> List[dict]:
+        cursor = self._conn.cursor()
+        query = """
+            SELECT phone_number,
+                   COALESCE(SUM(input_tokens), 0) as input_tokens,
+                   COALESCE(SUM(output_tokens), 0) as output_tokens,
+                   COALESCE(SUM(cost_usd), 0.0) as cost_usd,
+                   COUNT(*) as request_count
+            FROM usage_records
+        """
+        params: list = []
+        if days is not None:
+            if days == 0:
+                query += " WHERE timestamp >= datetime('now', 'start of day')"
+            else:
+                query += " WHERE timestamp >= datetime('now', ?)"
+                params.append(f"-{days} days")
+        query += " GROUP BY phone_number ORDER BY cost_usd DESC"
+        cursor.execute(query, params)
+        return [
+            {
+                "phone_number": row["phone_number"],
+                "input_tokens": row["input_tokens"],
+                "output_tokens": row["output_tokens"],
+                "cost_usd": row["cost_usd"],
+                "request_count": row["request_count"],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    async def get_usage_cost_since(
+        self,
+        phone_number: str,
+        days: int,
+    ) -> float:
+        """Get total cost for a user in the last N days.
+
+        Used by budget alert checks.
+
+        Args:
+            phone_number: User's phone number.
+            days: Number of days to look back.
+
+        Returns:
+            Total cost in USD.
+        """
+        summary = await self.get_usage_summary(phone_number, days)
+        return summary["cost_usd"]
 
 
 # Global database instance

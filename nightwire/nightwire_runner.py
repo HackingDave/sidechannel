@@ -98,6 +98,7 @@ class NightwireRunner:
         self.max_tokens = max_tokens
         self._session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()
+        self._last_usage: Optional[dict] = None
 
         # Validate API URL scheme and hostname
         parsed = urlparse(self.api_url)
@@ -118,6 +119,16 @@ class NightwireRunner:
             if self._session is None or self._session.closed:
                 self._session = aiohttp.ClientSession()
             return self._session
+
+    @property
+    def last_usage(self) -> Optional[dict]:
+        """Usage data from the most recent invocation.
+
+        Returns a dict with keys: ``input_tokens``, ``output_tokens``,
+        ``model``, ``cost_usd``. Returns None if no invocation has
+        completed or parsing failed.
+        """
+        return self._last_usage
 
     async def close(self):
         """Close the shared HTTP session."""
@@ -188,6 +199,14 @@ class NightwireRunner:
         usage = data.get("usage", {})
         tokens_used = usage.get("total_tokens") if usage else None
         model = data.get("model", self.model)
+
+        # Stash usage data for caller to record
+        self._last_usage = {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+            "model": model,
+            "cost_usd": 0.0,  # OpenAI-compatible APIs don't report cost
+        }
 
         return AssistantResponse(
             content=content,

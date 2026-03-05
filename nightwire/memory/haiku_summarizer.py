@@ -46,6 +46,16 @@ class HaikuSummarizer:
         """
         self.model = model
         self.timeout = timeout
+        self._last_usage: Optional[dict] = None
+
+    @property
+    def last_usage(self) -> Optional[dict]:
+        """Usage data from the most recent summarization call.
+
+        Returns a dict with keys: ``input_tokens``, ``output_tokens``,
+        ``model``, ``cost_usd``. Returns None if no call has completed.
+        """
+        return self._last_usage
 
     async def close(self):
         """No-op retained for interface compatibility.
@@ -153,6 +163,16 @@ class HaikuSummarizer:
                 "utf-8", errors="replace"
             )
             response = json.loads(stdout)
+            # Stash usage data for caller to record
+            usage = response.get("usage", {})
+            model_usage = response.get("modelUsage", {})
+            model_name = next(iter(model_usage), self.model)
+            self._last_usage = {
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "model": model_name,
+                "cost_usd": response.get("total_cost_usd", 0),
+            }
             result = response.get("result", "").strip()
             return result or None
 

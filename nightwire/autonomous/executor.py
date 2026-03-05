@@ -383,12 +383,16 @@ class TaskExecutor:
             await report_step("Claude executing implementation...")
 
             # Execute Claude
+            usage_records = []
             success, output = await runner.run_claude(
                 prompt=prompt,
                 timeout=self.config.claude_timeout,
                 progress_callback=progress_callback,
                 memory_context=None,  # Context already in prompt
             )
+            # Capture usage immediately before any subsequent call overwrites
+            if runner.last_usage:
+                usage_records.append(runner.last_usage.copy())
 
             if not success:
                 return TaskExecutionResult(
@@ -397,6 +401,7 @@ class TaskExecutor:
                     claude_output=output,
                     error_message=output[:500],
                     execution_time_seconds=(datetime.now() - start_time).total_seconds(),
+                    usage_data=usage_records or None,
                 )
 
             # Parse files changed from output
@@ -454,7 +459,7 @@ class TaskExecutor:
                             )
 
                             # Auto-fix loop: send issues back to Claude to fix
-                            verification_result, output, files_changed = (
+                            verification_result, output, files_changed, fix_usage = (
                                 await self._verification_fix_loop(
                                     task=task,
                                     runner=runner,
@@ -464,6 +469,11 @@ class TaskExecutor:
                                     progress_callback=progress_callback,
                                 )
                             )
+                            usage_records.extend(fix_usage)
+
+                        # Collect verification usage
+                        if verification_result and verification_result.usage_data:
+                            usage_records.append(verification_result.usage_data)
 
                     except VerificationError as e:
                         logger.warning("verification_error", task_id=task.id, error=str(e))
@@ -508,8 +518,13 @@ class TaskExecutor:
                 learnings = await self.learning_extractor.extract_with_claude(
                     task, result, runner,
                 )
+                # Capture learning extraction usage before it's overwritten
+                if runner.last_usage:
+                    usage_records.append(runner.last_usage.copy())
             except Exception:
                 learnings = await self.learning_extractor.extract(task, result)
+
+            result.usage_data = usage_records or None
             result.learnings_extracted = learnings
 
             logger.info(
@@ -565,11 +580,14 @@ class TaskExecutor:
         verification_result,
         original_output: str,
         progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
-    ):
+    ) -> tuple:
         """Attempt to auto-fix issues found by verification.
 
         Sends verification issues back to a fresh Claude instance to fix them,
         then re-verifies. Tries up to MAX_VERIFICATION_FIX_ATTEMPTS times.
+
+        Returns:
+            Tuple of (verification_result, output, files_changed, usage_records).
         """
         async def report_step(step: str):
             if progress_callback:
@@ -578,6 +596,7 @@ class TaskExecutor:
         current_result = verification_result
         current_output = original_output
         current_files = await self._get_files_changed(project_path)
+        fix_usage: list = []
 
         for attempt in range(MAX_VERIFICATION_FIX_ATTEMPTS):
             if current_result.passed:
@@ -599,6 +618,9 @@ class TaskExecutor:
                     timeout=min(self.config.claude_timeout, 600),
                     memory_context=None,
                 )
+                # Capture usage before close()
+                if fix_runner.last_usage:
+                    fix_usage.append(fix_runner.last_usage.copy())
             finally:
                 await fix_runner.close()
 
@@ -623,6 +645,9 @@ class TaskExecutor:
                     files_changed=current_files,
                     project_path=project_path,
                 )
+                # Collect re-verification usage
+                if current_result.usage_data:
+                    fix_usage.append(current_result.usage_data)
                 if current_result.passed:
                     await report_step("Verification passed after auto-fix!")
                 else:
@@ -637,7 +662,7 @@ class TaskExecutor:
                 logger.warning("re_verification_error", error=str(e), exc_type=type(e).__name__)
                 break
 
-        return current_result, current_output, current_files
+        return current_result, current_output, current_files, fix_usage
 
     def _build_fix_prompt(self, task: Task, verification_result) -> str:
         """Build a prompt to fix issues found by verification."""

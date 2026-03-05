@@ -65,6 +65,7 @@ class CoreCommandHandler(BaseCommandHandler):
             "sidechannel": self.handle_nightwire,
             "global": self.handle_global,
             "diagnose": self.handle_diagnose,
+            "usage": self.handle_usage,
         }
 
     def get_help_metadata(self):
@@ -153,6 +154,11 @@ class CoreCommandHandler(BaseCommandHandler):
                 "Run health checks on all dependencies",
                 "/diagnose",
                 ["/diagnose"],
+            ),
+            "usage": HelpMetadata(
+                "View token usage and cost tracking",
+                "/usage [project|all]",
+                ["/usage", "/usage project", "/usage all"],
             ),
         }
 
@@ -430,6 +436,7 @@ class CoreCommandHandler(BaseCommandHandler):
             f"Answer this question about the codebase: {args}",
             current_project,
             image_paths=image_paths,
+            source="ask",
         )
         return None
 
@@ -560,6 +567,7 @@ class CoreCommandHandler(BaseCommandHandler):
             "its structure, main technologies used, and any recent changes "
             "visible in git history.",
             current_project,
+            source="summary",
         )
         return None
 
@@ -666,7 +674,20 @@ class CoreCommandHandler(BaseCommandHandler):
             )
         if not args:
             return "Usage: /nightwire <question>\nAsk the AI assistant anything."
-        return await self._nightwire_response(args)
+        response = await self._nightwire_response(args)
+        # Record NightwireRunner usage
+        if self.ctx.nightwire_runner and self.ctx.nightwire_runner.last_usage:
+            try:
+                project = self.ctx.project_manager.get_current_project(sender)
+                await self.ctx.task_manager._record_usage(
+                    phone_number=sender,
+                    project_name=project,
+                    source="nightwire",
+                    usage_data=self.ctx.nightwire_runner.last_usage,
+                )
+            except Exception:
+                pass  # Non-critical
+        return response
 
     async def handle_global(self, sender: str, args: str) -> str:
         """Run memory commands in cross-project (global) scope.
@@ -740,6 +761,88 @@ class CoreCommandHandler(BaseCommandHandler):
             if not ok and hint:
                 line += f"\n      Hint: {hint}"
             lines.append(line)
+        return "\n".join(lines)
+
+    async def handle_usage(self, sender: str, args: str) -> str:
+        """View token usage and cost tracking.
+
+        Shows the requesting user's own usage summary by default.
+        ``/usage project`` shows per-project breakdown.
+        ``/usage all`` shows all users (admin only).
+
+        Signal usage::
+
+            /usage                — Your usage today/this week/all time
+            /usage project        — Per-project breakdown
+            /usage all            — All users (admin only)
+
+        Args:
+            sender: Phone number or UUID of the message sender.
+            args: Optional subcommand (project, all).
+
+        Returns:
+            Formatted usage summary.
+        """
+        subcommand = args.strip().lower() if args else ""
+
+        if subcommand == "all":
+            # Admin-only: all users
+            allowed = self.ctx.config.allowed_numbers
+            if not allowed or sender not in allowed[:1]:
+                return "Only the admin can view all-user usage."
+            rows = await self.ctx.task_manager.memory.db.get_usage_all_users()
+            if not rows:
+                return "No usage data recorded yet."
+            lines = ["Usage — All Users:"]
+            for row in rows:
+                phone = row["phone_number"]
+                masked = f"...{phone[-4:]}" if len(phone) >= 4 else phone
+                total_tokens = row["input_tokens"] + row["output_tokens"]
+                cost = row["cost_usd"]
+                lines.append(
+                    f"  {masked}: {total_tokens:,} tokens, ${cost:.4f}"
+                )
+            return "\n".join(lines)
+
+        if subcommand == "project":
+            rows = await self.ctx.task_manager.memory.db.get_usage_by_project(
+                sender
+            )
+            if not rows:
+                return "No usage data recorded yet."
+            lines = ["Usage — By Project:"]
+            for row in rows:
+                proj = row["project_name"] or "(no project)"
+                total_tokens = row["input_tokens"] + row["output_tokens"]
+                cost = row["cost_usd"]
+                lines.append(
+                    f"  {proj}: {total_tokens:,} tokens, ${cost:.4f}"
+                )
+            return "\n".join(lines)
+
+        # Default: user's own summary (today, this week, all time)
+        today_row = await self.ctx.task_manager.memory.db.get_usage_summary(
+            sender, days=0
+        )
+        week_row = await self.ctx.task_manager.memory.db.get_usage_summary(
+            sender, days=7
+        )
+        all_row = await self.ctx.task_manager.memory.db.get_usage_summary(
+            sender
+        )
+
+        def fmt(row):
+            if not row or (row["input_tokens"] == 0 and row["output_tokens"] == 0):
+                return "0 tokens, $0.0000"
+            total = row["input_tokens"] + row["output_tokens"]
+            return f"{total:,} tokens, ${row['cost_usd']:.4f}"
+
+        lines = [
+            "Usage Summary:",
+            f"  Today: {fmt(today_row)}",
+            f"  This week: {fmt(week_row)}",
+            f"  All time: {fmt(all_row)}",
+        ]
         return "\n".join(lines)
 
     # --- Helper methods ---

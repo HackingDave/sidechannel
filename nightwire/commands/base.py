@@ -43,7 +43,7 @@ BUILTIN_COMMANDS = frozenset({
     "help", "projects", "select", "add", "remove", "new", "status",
     "ask", "do", "complex", "cancel", "summary",
     "cooldown", "update", "nightwire", "sidechannel",
-    "global", "diagnose",
+    "global", "diagnose", "usage",
     "remember", "recall", "history", "forget", "memories", "preferences",
     "prd", "story", "task", "tasks", "autonomous", "queue", "learnings",
 })

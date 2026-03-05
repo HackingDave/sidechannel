@@ -292,6 +292,9 @@ class VerificationResult(BaseModel):
     execution_time_seconds: float = Field(
         default=0.0, description="Verification execution time"
     )
+    usage_data: Optional[dict] = Field(
+        default=None, description="Token/cost usage from verification run"
+    )
 
 
 class TaskExecutionResult(BaseModel):
@@ -320,6 +323,9 @@ class TaskExecutionResult(BaseModel):
     error_message: Optional[str] = Field(default=None, description="Error if failed")
     execution_time_seconds: float = Field(
         default=0.0, description="Total execution time"
+    )
+    usage_data: Optional[list] = Field(
+        default=None, description="List of usage dicts from all Claude calls"
     )
 
 

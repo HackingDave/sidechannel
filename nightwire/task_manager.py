@@ -66,6 +66,96 @@ class TaskManager:
         self._session_ids: Dict[str, str] = {}
         # Set after start() — deferred initialization
         self.autonomous_manager = None
+        # Budget alert spam prevention: set of alert keys already sent today.
+        # Keys are "{phone}:{period}:{threshold}" e.g. "+1234:daily:80"
+        self._budget_alerts_sent: set = set()
+
+    async def _record_usage(
+        self,
+        phone_number: str,
+        project_name: Optional[str],
+        source: str,
+        usage_data: Optional[dict] = None,
+        session_id: Optional[str] = None,
+    ) -> None:
+        """Record a usage entry from a runner invocation (fire-and-forget safe).
+
+        Args:
+            phone_number: User who triggered the invocation.
+            project_name: Active project name (may be None).
+            source: Source label (do, ask, complex, summary, etc.).
+            usage_data: Dict with input_tokens, output_tokens, model, cost_usd.
+            session_id: Optional CLI session ID.
+        """
+        if not usage_data:
+            return
+        try:
+            await self.memory.db.record_usage(
+                phone_number=phone_number,
+                project_name=project_name,
+                model=usage_data.get("model", "unknown"),
+                input_tokens=usage_data.get("input_tokens", 0),
+                output_tokens=usage_data.get("output_tokens", 0),
+                cost_usd=usage_data.get("cost_usd", 0.0),
+                source=source,
+                session_id=session_id,
+            )
+            # Check budget thresholds
+            await self._check_budget_alerts(phone_number)
+        except Exception as e:
+            logger.debug("usage_recording_failed", error=str(e), source=source)
+
+    async def _check_budget_alerts(self, phone_number: str) -> None:
+        """Check daily/weekly budget thresholds and send alerts once.
+
+        Alerts at 80% and 100% of configured budget. Each alert is sent
+        only once per phone/period/threshold until the period resets.
+        """
+        now = datetime.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Reset alerts at the start of each day
+        day_key = today_start.isoformat()
+        if not hasattr(self, "_budget_alert_day") or self._budget_alert_day != day_key:
+            self._budget_alert_day = day_key
+            self._budget_alerts_sent.clear()
+
+        checks = []
+        daily_budget = self.config.usage_daily_budget_usd
+        if daily_budget and daily_budget > 0:
+            daily_cost = await self.memory.db.get_usage_cost_since(
+                phone_number, 0
+            )
+            checks.append(("daily", daily_budget, daily_cost))
+
+        weekly_budget = self.config.usage_weekly_budget_usd
+        if weekly_budget and weekly_budget > 0:
+            weekly_cost = await self.memory.db.get_usage_cost_since(
+                phone_number, 7
+            )
+            checks.append(("weekly", weekly_budget, weekly_cost))
+
+        for period, budget, spent in checks:
+            pct = (spent / budget) * 100 if budget > 0 else 0
+
+            if pct >= 100:
+                key = f"{phone_number}:{period}:100"
+                if key not in self._budget_alerts_sent:
+                    self._budget_alerts_sent.add(key)
+                    await self._send_message(
+                        phone_number,
+                        f"Budget EXCEEDED: {period} spending ${spent:.2f}"
+                        f" has reached ${budget:.2f} ({pct:.0f}%).",
+                    )
+            elif pct >= 80:
+                key = f"{phone_number}:{period}:80"
+                if key not in self._budget_alerts_sent:
+                    self._budget_alerts_sent.add(key)
+                    await self._send_message(
+                        phone_number,
+                        f"Budget WARNING: {period} spending ${spent:.2f}"
+                        f" is approaching ${budget:.2f} ({pct:.0f}%).",
+                    )
 
     def get_task_state(self, sender: str, project_name: Optional[str] = None) -> Optional[dict]:
         """Get the current task state for a sender, or None."""
@@ -89,6 +179,7 @@ class TaskManager:
         task_description: str,
         project_name: Optional[str],
         image_paths: Optional[List[Path]] = None,
+        source: str = "do",
     ) -> None:
         """Start a Claude task in the background (non-blocking).
 
@@ -99,6 +190,7 @@ class TaskManager:
             image_paths: Optional list of saved image file paths.
                 When provided, file paths are appended to the prompt
                 so Claude's agentic Read tool can view the images.
+            source: Usage source label (do, ask, summary, complex).
         """
         # Build effective description with image paths appended
         effective_description = task_description
@@ -151,6 +243,18 @@ class TaskManager:
                     stream=True,
                     resume_session_id=resume_id,
                 )
+                # Record usage (fire-and-forget)
+                t_usage = asyncio.create_task(
+                    self._record_usage(
+                        phone_number=sender,
+                        project_name=project_name,
+                        source=source,
+                        usage_data=self.runner.last_usage,
+                        session_id=self.runner.last_session_id,
+                    )
+                )
+                t_usage.add_done_callback(log_task_exception)
+
                 # Store session_id for next invocation
                 if (
                     success
@@ -452,6 +556,14 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
                 project_path=project_path,
             )
 
+            # Record structured call usage
+            await self._record_usage(
+                phone_number=sender,
+                project_name=project_name,
+                source="complex",
+                usage_data=self.runner.last_usage,
+            )
+
             if success and isinstance(result, PRDBreakdown):
                 # Structured path — typed model access
                 await update_step("Creating PRD structure...", notify=False)
@@ -466,6 +578,13 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
                 fallback_prompt,
                 timeout=self.config.claude_timeout,
                 project_path=project_path,
+            )
+            # Record fallback call usage
+            await self._record_usage(
+                phone_number=sender,
+                project_name=project_name,
+                source="complex",
+                usage_data=self.runner.last_usage,
             )
 
             if not success:

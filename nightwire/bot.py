@@ -213,12 +213,34 @@ class SignalBot:
         async def autonomous_notify(phone: str, message: str):
             await self._send_message(phone, message)
 
+        async def autonomous_usage_recorder(
+            phone_number: str,
+            project_name: str = None,
+            source: str = "autonomous",
+            usage_data: dict = None,
+        ):
+            if not usage_data:
+                return
+            try:
+                await self.memory.db.record_usage(
+                    phone_number=phone_number,
+                    project_name=project_name,
+                    model=usage_data.get("model", "unknown"),
+                    input_tokens=usage_data.get("input_tokens", 0),
+                    output_tokens=usage_data.get("output_tokens", 0),
+                    cost_usd=usage_data.get("cost_usd", 0.0),
+                    source=source,
+                )
+            except Exception as e:
+                logger.debug("autonomous_usage_record_failed", error=str(e))
+
         self.autonomous_manager = AutonomousManager(
             db_connection=self.memory.db._conn,
             progress_callback=autonomous_notify,
             poll_interval=self.config.autonomous_poll_interval,
             run_quality_gates=self.config.autonomous_quality_gates,
             max_parallel=self.config.autonomous_max_parallel,
+            usage_recorder=autonomous_usage_recorder,
         )
         self.autonomous_commands = AutonomousCommands(
             manager=self.autonomous_manager,

@@ -474,6 +474,20 @@ class MemoryManager:
                     query,
                     max_output_tokens=300
                 )
+                # Record haiku summarizer usage
+                if summarizer.last_usage:
+                    try:
+                        await self.db.record_usage(
+                            phone_number=phone_number,
+                            project_name=project_name,
+                            model=summarizer.last_usage.get("model", "haiku"),
+                            input_tokens=summarizer.last_usage.get("input_tokens", 0),
+                            output_tokens=summarizer.last_usage.get("output_tokens", 0),
+                            cost_usd=summarizer.last_usage.get("cost_usd", 0.0),
+                            source="haiku",
+                        )
+                    except Exception:
+                        pass  # Non-critical
             except Exception as e:
                 logger.warning("summarizer_failed", error=str(e))
 

@@ -59,6 +59,7 @@ class AutonomousLoop:
         progress_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
         poll_interval: int = 30,
         max_parallel: int = 3,
+        usage_recorder: Optional[Callable[..., Awaitable[None]]] = None,
     ):
         """
         Initialize the autonomous loop.
@@ -69,12 +70,15 @@ class AutonomousLoop:
             progress_callback: Async callback(phone_number, message) for progress updates
             poll_interval: Seconds between queue polls
             max_parallel: Max concurrent task workers
+            usage_recorder: Async callback to record usage data.
+                Signature: (phone_number, project_name, source, usage_data) -> None.
         """
         self.db = db
         self.executor = executor
         self.progress_callback = progress_callback
         self.poll_interval = poll_interval
         self.max_parallel = max_parallel
+        self._usage_recorder = usage_recorder
 
         self._running = False
         self._paused = False
@@ -460,6 +464,20 @@ class AutonomousLoop:
 
             # Execute the task
             result = await self.executor.execute(task, progress_callback=task_progress)
+
+            # Record accumulated usage from task execution
+            if result.usage_data and self._usage_recorder:
+                project_name = task.project_name
+                for usage_entry in result.usage_data:
+                    try:
+                        await self._usage_recorder(
+                            phone_number=task.phone_number,
+                            project_name=project_name,
+                            source="autonomous",
+                            usage_data=usage_entry,
+                        )
+                    except Exception:
+                        pass  # Non-critical
 
             # Handle result
             if result.success:
