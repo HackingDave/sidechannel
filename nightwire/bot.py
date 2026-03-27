@@ -1388,6 +1388,16 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
         )
         t.add_done_callback(_log_task_exception)
 
+        # Check pre-command matchers (e.g., device targeting)
+        if message:
+            for matcher in self.plugin_loader.get_sorted_matchers():
+                if matcher.pre_command and matcher.match_fn(message):
+                    response = await matcher.handle_fn(sender, message)
+                    if response is not None:
+                        if response:
+                            await self._send_message(sender, response)
+                        return  # Consumed (silently if empty, with response if not)
+
         # Check if it's a command
         if message and message.startswith("/"):
             parts = message[1:].split(maxsplit=1)
