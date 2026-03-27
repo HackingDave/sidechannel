@@ -110,6 +110,8 @@ Your plugin receives a `PluginContext` as `self.ctx`. This is your interface to 
 | `ctx.data_dir` | Path | Persistent data directory for your plugin |
 | `ctx.enabled` | bool | Whether plugin is enabled in config (default: True) |
 | `ctx.plugin_name` | str | Your plugin's name |
+| `ctx.instance_name` | str | This bot instance's name (from `instance_name` in settings.yaml) |
+| `ctx.signal_api_url` | str | Signal CLI REST API base URL |
 
 ### Config Example
 
@@ -191,6 +193,18 @@ async def _handle(self, sender: str, message: str) -> str:
 **Priority order:** When multiple plugins register matchers, they're sorted by priority. The first matcher where `match_fn` returns `True` handles the message — no further matchers or default routing are checked.
 
 **Routing order:** `/commands` are always checked before matchers. Matchers are checked before the nightwire assistant and default `/do` routing.
+
+**Pre-command matchers:** Set `pre_command=True` on a `MessageMatcher` to intercept messages *before* the built-in command dispatcher. Use this when your plugin needs to gate or redirect commands (e.g., device targeting). Pre-command matchers fire before `/ask`, `/do`, `/complex`, and other built-in commands.
+
+```python
+MessageMatcher(
+    priority=0,
+    match_fn=self._should_intercept,
+    handle_fn=self._intercept,
+    description="Gate commands before dispatch",
+    pre_command=True,   # Run before built-in /commands
+)
+```
 
 ## Lifecycle Hooks
 
@@ -345,4 +359,41 @@ class TestMyPlugin:
 ```
 
 Run tests: `python -m pytest tests/test_plugin_my_plugin.py -v`
+
+## Built-in Plugins
+
+### Device Targeting (`device_target`)
+
+Routes task commands (`/do`, `/ask`, `/complex`, `/summary`) to a specific nightwire instance when multiple instances share the same Signal account.
+
+**Setup:**
+
+1. Give each instance a unique `instance_name` in `config/settings.yaml`:
+
+```yaml
+instance_name: "nightwire-osx"
+```
+
+2. Add the plugin config:
+
+```yaml
+plugins:
+  device_target:
+    enabled: true
+    signal_account: "+15551234567"  # Your Signal account number
+    refresh_interval: 300           # Device list refresh interval in seconds
+```
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/target` | Show available instances and pick one |
+| `/target <name>` | Set target (e.g., `/target osx` matches `nightwire-osx`) |
+| `/target status` | Show current target |
+| `/target clear` | Clear target (commands run on all instances again) |
+
+**How it works:**
+
+On startup, the plugin queries the Signal API for linked devices whose names contain "nightwire". When you `/target osx`, subsequent `/do`, `/ask`, `/complex`, and `/summary` commands only execute on the instance named `nightwire-osx`. Other instances receive the message but silently ignore gated commands. Non-task commands (`/help`, `/status`, `/projects`) always run on every instance.
 

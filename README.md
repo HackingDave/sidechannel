@@ -17,6 +17,7 @@ Most AI coding tools require you to sit at your computer. Nightwire lets you man
 - **Trust the output** - Every autonomous task is independently verified by a separate Claude context using a fail-closed security model. Code that introduces security issues or logic errors is rejected automatically
 - **Powered by Claude** - All code analysis, generation, and autonomous tasks run through Claude (via Claude CLI). Optionally add OpenAI or Grok as lightweight quick-response assistants for general questions that don't need project access
 - **Stay secure** - Phone number allowlist, end-to-end encryption via Signal, rate limiting, path validation hardening, and no message content logging
+- **Run multiple instances** - Use the built-in device targeting plugin to run nightwire on several machines (laptop, desktop, server) under one Signal account and route commands to a specific instance with `/target`
 
 ### Key Benefits
 
@@ -649,6 +650,8 @@ Every plugin inherits from `NightwirePlugin` and receives a `PluginContext` obje
 | `ctx.data_dir` | Path to a persistent data directory for your plugin |
 | `ctx.enabled` | Whether the plugin is enabled in config (default: `True`) |
 | `ctx.plugin_name` | Your plugin's name string |
+| `ctx.instance_name` | This bot instance's name (from `instance_name` in settings.yaml) |
+| `ctx.signal_api_url` | Signal CLI REST API base URL |
 
 ### Example: Command Plugin
 
@@ -825,13 +828,14 @@ MY_PLUGIN_SECRET=xyz789
 
 When a message arrives, Nightwire processes it in this order:
 
-1. **`/command`** — Core commands (help, projects, ask, do, etc.) checked first
-2. **Plugin commands** — `/commands` registered by plugins, in load order
-3. **Plugin message matchers** — Sorted by priority (lower number = checked first)
-4. **Nightwire assistant** — Messages starting with "nightwire:" prefix
-5. **Default** — Treated as `/do` if a project is selected
+1. **Pre-command matchers** — Plugin matchers with `pre_command=True`, sorted by priority. Can intercept before any command dispatch (used by the device targeting plugin)
+2. **`/command`** — Core commands (help, projects, ask, do, etc.)
+3. **Plugin commands** — `/commands` registered by plugins, in load order
+4. **Plugin message matchers** — Standard matchers sorted by priority (lower number = checked first)
+5. **Nightwire assistant** — Messages starting with "nightwire:" prefix
+6. **Default** — Treated as `/do` if a project is selected
 
-Core commands always take precedence. If two plugins register the same `/command` name, the first-loaded plugin wins and a warning is logged.
+Core commands always take precedence over plugin commands. If two plugins register the same `/command` name, the first-loaded plugin wins and a warning is logged.
 
 ## How the Memory System Works
 

@@ -1,6 +1,11 @@
 # nightwire configuration
 # Copy to settings.yaml and customize
 
+# Instance name — identifies this bot instance in Signal's linked devices list.
+# Required when running multiple nightwire instances on the same Signal account.
+# Should match the device name shown in Signal → Settings → Linked Devices.
+# instance_name: "nightwire-osx"
+
 # Phone numbers or Signal UUIDs authorized to use the bot
 # Supports E.164 phone numbers and Signal UUIDs (for modern accounts)
 # IMPORTANT: Replace with your actual phone number or UUID
@@ -75,6 +80,13 @@ nightwire_assistant:
 # Plugins — extend nightwire with custom functionality
 # Each plugin has its own config section under plugins.<name>
 # plugins:
+#   # Device targeting — route /do, /ask, /complex, /summary to a specific instance
+#   # when running multiple nightwire instances on the same Signal account.
+#   # Requires instance_name to be set above.
+#   device_target:
+#     enabled: true
+#     signal_account: "+1XXXXXXXXXX"  # Your Signal account number
+#     refresh_interval: 300           # Device list refresh in seconds (default: 300)
 #   daily_verse:
 #     enabled: true
 #     hour: 8

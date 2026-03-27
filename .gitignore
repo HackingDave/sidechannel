@@ -60,3 +60,6 @@ plugins/bluos_music/
 signal-data/
 signal-cli-config/
 
+# Worktrees
+.worktrees/
+

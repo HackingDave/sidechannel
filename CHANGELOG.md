@@ -5,6 +5,13 @@ All notable changes to nightwire (formerly sidechannel) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.16] - 2026-03-27
+
+### Added
+- Device targeting plugin (`/target`) for routing task commands to specific nightwire instances when multiple instances share the same Signal account
+- Pre-command message matchers — plugins can now intercept messages before built-in command dispatch via `pre_command=True` on `MessageMatcher`
+- `instance_name` and `signal_api_url` properties on `PluginContext`
+
 ## [2.5.15] - 2026-03-04
 
 ### Changed

@@ -21,11 +21,13 @@ class MessageMatcher:
         match_fn: Sync function (message: str) -> bool.
         handle_fn: Async function (sender: str, message: str) -> str.
         description: Human-readable label for logging.
+        pre_command: If True, runs before builtin command dispatch.
     """
     priority: int
     match_fn: Callable[[str], bool]
     handle_fn: Callable[[str, str], Awaitable[str]]
     description: str = ""
+    pre_command: bool = False
 
 
 @dataclass
@@ -57,6 +59,7 @@ class PluginContext:
     ):
         self.plugin_name = plugin_name
         self._send_message = send_message
+        self._settings = settings
         # Only expose the plugin's own config section, not full settings
         self._plugin_settings = settings.get("plugins", {}).get(plugin_name, {})
         self.allowed_numbers = list(allowed_numbers)  # Read-only copy
@@ -75,6 +78,16 @@ class PluginContext:
     def enabled(self) -> bool:
         """Whether this plugin is enabled in config (default True)."""
         return self._plugin_settings.get("enabled", True)
+
+    @property
+    def instance_name(self) -> str:
+        """The instance name for this bot (e.g., 'nightwire-osx')."""
+        return self._settings.get("instance_name", "nightwire")
+
+    @property
+    def signal_api_url(self) -> str:
+        """The Signal CLI REST API URL."""
+        return os.environ.get("SIGNAL_API_URL") or self._settings.get("signal_api_url", "http://127.0.0.1:8080")
 
     async def send_message(self, recipient: str, message: str) -> None:
         """Send a Signal message to a recipient."""
