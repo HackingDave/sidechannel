@@ -72,6 +72,58 @@ def test_env_vars_exclude_path():
     assert "ANTHROPIC_API_KEY" in env_vars
 
 
+def test_sandbox_opencode_env_passthrough():
+    """OpenCode mode should pass required env vars and auth mount."""
+    config = SandboxConfig(enabled=True, runner_type="opencode")
+    cmd = ["opencode", "run", "--format", "json"]
+    project_path = Path("/home/user/projects/myapp")
+
+    result = build_sandbox_command(cmd, project_path, config)
+
+    env_vars = []
+    for i, arg in enumerate(result):
+        if arg == "-e" and i + 1 < len(result):
+            env_vars.append(result[i + 1])
+
+    assert "HOME" in env_vars
+    assert "XDG_CONFIG_HOME" in env_vars
+    assert "XDG_DATA_HOME" in env_vars
+    assert "XDG_STATE_HOME" in env_vars
+    assert "ANTHROPIC_API_KEY" not in env_vars
+    assert any(
+        arg == f"{Path.home() / '.local/share/opencode'}:/home/sandbox/.local/share/opencode:ro"
+        for arg in result
+    )
+
+
+def test_sandbox_claude_env_unchanged():
+    """Claude mode should continue passing ANTHROPIC_API_KEY."""
+    config = SandboxConfig(enabled=True)
+    cmd = ["claude", "--print"]
+    project_path = Path("/home/user/projects/myapp")
+
+    result = build_sandbox_command(cmd, project_path, config)
+
+    env_vars = []
+    for i, arg in enumerate(result):
+        if arg == "-e" and i + 1 < len(result):
+            env_vars.append(result[i + 1])
+
+    assert "ANTHROPIC_API_KEY" in env_vars
+    assert "HOME" not in env_vars
+
+
+def test_sandbox_opencode_command_wrapping():
+    """OpenCode inner command should be preserved in docker wrapping."""
+    config = SandboxConfig(enabled=True, runner_type="opencode")
+    cmd = ["opencode", "run", "--format", "json", "--dir", "/tmp/project"]
+    project_path = Path("/home/user/projects/myapp")
+
+    result = build_sandbox_command(cmd, project_path, config)
+    image_idx = result.index(config.image)
+    assert result[image_idx + 1:] == cmd
+
+
 def test_tmpfs_size_configurable():
     """tmpfs_size should be reflected in the docker command."""
     config = SandboxConfig(enabled=True, tmpfs_size="512m")

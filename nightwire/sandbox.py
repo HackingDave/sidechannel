@@ -19,6 +19,7 @@ class SandboxConfig:
     memory_limit: str = "2g"
     cpu_limit: float = 2.0
     tmpfs_size: str = "256m"
+    runner_type: str = "claude"
 
 
 def validate_docker_available() -> Tuple[bool, str]:
@@ -60,6 +61,7 @@ def build_sandbox_command(
     cmd: List[str],
     project_path: Path,
     config: SandboxConfig,
+    runner_type: str = "claude",
 ) -> List[str]:
     """Wrap a command in a Docker sandbox if enabled.
 
@@ -87,10 +89,24 @@ def build_sandbox_command(
     if not config.network:
         docker_cmd.append("--network=none")
 
-    # Pass through essential env vars (not PATH — container has its own)
-    docker_cmd.extend([
-        "-e", "ANTHROPIC_API_KEY",
-    ])
+    effective_runner_type = runner_type
+    if effective_runner_type == "claude" and config.runner_type != "claude":
+        effective_runner_type = config.runner_type
+
+    # Pass through essential env vars (not PATH - container has its own)
+    if effective_runner_type == "opencode":
+        docker_cmd.extend([
+            "-e", "HOME",
+            "-e", "XDG_CONFIG_HOME",
+            "-e", "XDG_DATA_HOME",
+            "-e", "XDG_STATE_HOME",
+            "-v",
+            f"{Path.home() / '.local/share/opencode'}:/home/sandbox/.local/share/opencode:ro",
+        ])
+    else:
+        docker_cmd.extend([
+            "-e", "ANTHROPIC_API_KEY",
+        ])
 
     docker_cmd.append(config.image)
     docker_cmd.extend(cmd)

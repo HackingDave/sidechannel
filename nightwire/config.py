@@ -129,6 +129,28 @@ class Config:
             return str(home_local)
         return "claude"  # Hope it's in PATH
 
+    @property
+    def runner_type(self) -> str:
+        """Get configured task runner type (default claude)."""
+        return self.settings.get("runner", {}).get("type", "claude")
+
+    @property
+    def runner_path(self) -> str:
+        """Get absolute path to active runner binary."""
+        configured = self.settings.get("runner", {}).get("path")
+        if configured:
+            return configured
+
+        if self.runner_type == "opencode":
+            found = shutil.which("opencode")
+            if found:
+                return found
+            home_local = Path.home() / ".local" / "bin" / "opencode"
+            if home_local.exists():
+                return str(home_local)
+
+        return self.claude_path
+
     # nightwire AI assistant configuration (any OpenAI-compatible provider)
     def _get_dict_setting(self, *keys: str) -> dict:
         """Safely get a config section that should be a dict, with fallback keys.

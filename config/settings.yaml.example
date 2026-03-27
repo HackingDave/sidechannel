@@ -21,6 +21,12 @@ claude_timeout: 600           # Max seconds per Claude invocation
 claude_max_turns: 15          # Max conversation turns per invocation
 # claude_path: "/usr/local/bin/claude"  # Override Claude CLI path
 
+# Runner selection (default: claude)
+# Set to "opencode" to use OpenCode CLI instead of Claude
+# runner:
+#   type: "claude"       # "claude" or "opencode"
+#   path: ""             # optional: explicit path to runner binary
+
 # Memory System
 memory:
   session_timeout: 30          # Minutes before session expires
