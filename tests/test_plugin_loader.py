@@ -61,3 +61,30 @@ def test_plugin_no_allowlist_loads_all(tmp_path):
     )
     # No exception means no block
     loader.discover_and_load()
+
+
+def test_message_matcher_pre_command_default():
+    """MessageMatcher.pre_command defaults to False for backwards compat."""
+    from nightwire.plugin_base import MessageMatcher
+
+    matcher = MessageMatcher(
+        priority=10,
+        match_fn=lambda msg: True,
+        handle_fn=AsyncMock(),
+        description="test",
+    )
+    assert matcher.pre_command is False
+
+
+def test_message_matcher_pre_command_set():
+    """MessageMatcher.pre_command can be set to True."""
+    from nightwire.plugin_base import MessageMatcher
+
+    matcher = MessageMatcher(
+        priority=5,
+        match_fn=lambda msg: True,
+        handle_fn=AsyncMock(),
+        description="test",
+        pre_command=True,
+    )
+    assert matcher.pre_command is True

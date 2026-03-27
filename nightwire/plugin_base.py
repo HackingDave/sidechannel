@@ -21,11 +21,13 @@ class MessageMatcher:
         match_fn: Sync function (message: str) -> bool.
         handle_fn: Async function (sender: str, message: str) -> str.
         description: Human-readable label for logging.
+        pre_command: If True, runs before builtin command dispatch.
     """
     priority: int
     match_fn: Callable[[str], bool]
     handle_fn: Callable[[str, str], Awaitable[str]]
     description: str = ""
+    pre_command: bool = False
 
 
 @dataclass
