@@ -71,10 +71,14 @@ class DeviceTargetPlugin(NightwirePlugin):
         """Pre-command gate handler.
 
         Returns:
-            None: pass through (target matches this instance)
+            None: pass through (target matches this instance, or single-instance mode)
             "": silently consume (target is a different instance)
-            str: send this response (no target set)
+            str: send this response (no target set but multiple instances exist)
         """
+        # No gating needed when running as sole instance
+        if len(self._devices) < 2:
+            return None
+
         target = self._targets.get(sender)
         if target is None:
             return "No target set. Use /target to pick a machine."
@@ -155,7 +159,10 @@ class DeviceTargetPlugin(NightwirePlugin):
             await asyncio.sleep(interval)
 
     async def on_start(self) -> None:
-        """Start device refresh loop."""
+        """Start device refresh loop (only if signal_account is configured)."""
+        if not self.ctx.get_config("signal_account"):
+            self.ctx.logger.info("device_target_skipped", msg="No signal_account configured, plugin inactive")
+            return
         self._session = aiohttp.ClientSession()
         self._refresh_task = asyncio.create_task(self._refresh_loop())
 

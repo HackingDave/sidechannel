@@ -128,10 +128,21 @@ class TestMessageGating:
         assert "No target set" in result
 
     @pytest.mark.asyncio
+    async def test_single_instance_passes_through(self, tmp_path):
+        """With fewer than 2 devices, gate always passes through."""
+        ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
+        plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-osx"]
+
+        result = await plugin._handle_gate("+15559999999", "/do fix the bug")
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_target_matches_passes_through(self, tmp_path):
         """When target matches this instance, return None (pass through)."""
         ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
         plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-osx", "nightwire-linux"]
         plugin._targets["+15559999999"] = "nightwire-osx"
 
         result = await plugin._handle_gate("+15559999999", "/do fix the bug")
@@ -142,6 +153,7 @@ class TestMessageGating:
         """When target doesn't match, return empty string (silent consume)."""
         ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
         plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-osx", "nightwire-linux"]
         plugin._targets["+15559999999"] = "nightwire-linux"
 
         result = await plugin._handle_gate("+15559999999", "/do fix the bug")
@@ -152,6 +164,7 @@ class TestMessageGating:
         """Plain text (implicit /do) should also be gated."""
         ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
         plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-osx", "nightwire-linux"]
         plugin._targets["+15559999999"] = "nightwire-linux"
 
         result = await plugin._handle_gate("+15559999999", "fix the bug please")
