@@ -86,47 +86,60 @@ class DeviceTargetPlugin(NightwirePlugin):
             return None  # This instance handles it
         return ""  # Different instance — silently consume
 
-    async def _handle_target(self, sender: str, args: str) -> str:
-        """Handle /target command."""
+    def _should_respond(self, sender: str) -> bool:
+        """Determine if this instance should send the /target response.
+
+        All instances process /target to sync state, but only one responds.
+        """
+        current_target = self._targets.get(sender)
+        if current_target is not None:
+            return current_target == self.ctx.instance_name
+        # No target set — first device alphabetically responds (deterministic tie-break)
+        if self._devices:
+            return self.ctx.instance_name == self._devices[0]
+        return True
+
+    async def _handle_target(self, sender: str, args: str) -> Optional[str]:
+        """Handle /target command. All instances update state, only one responds."""
         args = args.strip().lower()
 
         if args == "clear":
             self._targets.pop(sender, None)
             self._save_targets()
-            return "Target cleared. Use /target to pick a machine."
-
-        if args == "status":
+            result = "Target cleared. Use /target to pick a machine."
+        elif args == "status":
             target = self._targets.get(sender)
             if not target:
-                return "No target set. Use /target to pick a machine."
-            warning = ""
-            if target not in self._devices:
-                warning = f"\n⚠️ Warning: {target} is not currently visible in linked devices."
-            return f"Current target: {target}{warning}"
-
-        if args:
+                result = "No target set. Use /target to pick a machine."
+            else:
+                warning = ""
+                if target not in self._devices:
+                    warning = f"\n⚠️ Warning: {target} is not currently visible in linked devices."
+                result = f"Current target: {target}{warning}"
+        elif args:
             matched = self._match_device(args)
             if matched:
                 self._targets[sender] = matched
                 self._save_targets()
-                return f"Target set to {matched}. Task commands will run on this instance."
+                result = f"Target set to {matched}. Task commands will run on this instance."
             else:
                 device_list = "\n".join(f"  - {d}" for d in self._devices) if self._devices else "  (none found)"
-                return f"No matching device found for '{args}'.\n\nAvailable instances:\n{device_list}"
-
-        # No args — show picker or auto-select
-        if not self._devices:
-            return "No nightwire instances found. Check that devices are linked and Signal API is reachable."
-
-        if len(self._devices) == 1:
+                result = f"No matching device found for '{args}'.\n\nAvailable instances:\n{device_list}"
+        elif not self._devices:
+            result = "No nightwire instances found. Check that devices are linked and Signal API is reachable."
+        elif len(self._devices) == 1:
             self._targets[sender] = self._devices[0]
             self._save_targets()
-            return f"Only one instance found. Auto-selected: {self._devices[0]}"
+            result = f"Only one instance found. Auto-selected: {self._devices[0]}"
+        else:
+            current = self._targets.get(sender)
+            current_line = f"\nCurrent target: {current}" if current else ""
+            device_list = "\n".join(f"  {i+1}. {d}" for i, d in enumerate(self._devices))
+            result = f"Available nightwire instances:\n{device_list}\n\nReply with /target <name> to select (e.g., /target osx).{current_line}"
 
-        current = self._targets.get(sender)
-        current_line = f"\nCurrent target: {current}" if current else ""
-        device_list = "\n".join(f"  {i+1}. {d}" for i, d in enumerate(self._devices))
-        return f"Available nightwire instances:\n{device_list}\n\nReply with /target <name> to select (e.g., /target osx).{current_line}"
+        if not self._should_respond(sender):
+            return None
+        return result
 
     async def _refresh_devices(self) -> None:
         """Fetch linked devices from Signal API and filter for nightwire instances."""

@@ -204,7 +204,8 @@ class TestTargetCommand:
     """Test /target command handling."""
 
     @pytest.mark.asyncio
-    async def test_target_set(self, tmp_path):
+    async def test_target_set_responds_from_targeted_instance(self, tmp_path):
+        """Only the newly targeted instance should respond."""
         ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
         plugin = _make_plugin(ctx)
         plugin._devices = ["nightwire-osx", "nightwire-linux"]
@@ -214,14 +215,39 @@ class TestTargetCommand:
         assert plugin._targets["+15559999999"] == "nightwire-osx"
 
     @pytest.mark.asyncio
-    async def test_target_clear(self, tmp_path):
-        ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
+    async def test_target_set_silent_on_other_instance(self, tmp_path):
+        """Non-targeted instance should return None (no response)."""
+        ctx = _make_ctx(tmp_path, instance_name="nightwire-linux")
         plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-osx", "nightwire-linux"]
+
+        result = await plugin._handle_target("+15559999999", "osx")
+        assert result is None
+        assert plugin._targets["+15559999999"] == "nightwire-osx"
+
+    @pytest.mark.asyncio
+    async def test_target_clear_responds_from_first_device(self, tmp_path):
+        """After clear, first device alphabetically responds."""
+        ctx = _make_ctx(tmp_path, instance_name="nightwire-linux")
+        plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-linux", "nightwire-osx"]
         plugin._targets["+15559999999"] = "nightwire-osx"
 
         result = await plugin._handle_target("+15559999999", "clear")
-        assert "cleared" in result.lower() or "Cleared" in result
         assert "+15559999999" not in plugin._targets
+        assert "cleared" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_target_clear_silent_on_other_instance(self, tmp_path):
+        """After clear, non-first device returns None."""
+        ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
+        plugin = _make_plugin(ctx)
+        plugin._devices = ["nightwire-linux", "nightwire-osx"]
+        plugin._targets["+15559999999"] = "nightwire-osx"
+
+        result = await plugin._handle_target("+15559999999", "clear")
+        assert "+15559999999" not in plugin._targets
+        assert result is None
 
     @pytest.mark.asyncio
     async def test_target_status(self, tmp_path):
@@ -235,9 +261,10 @@ class TestTargetCommand:
 
     @pytest.mark.asyncio
     async def test_target_no_args_shows_picker(self, tmp_path):
-        ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
+        """With no target, first device alphabetically responds."""
+        ctx = _make_ctx(tmp_path, instance_name="nightwire-linux")
         plugin = _make_plugin(ctx)
-        plugin._devices = ["nightwire-osx", "nightwire-linux"]
+        plugin._devices = ["nightwire-linux", "nightwire-osx"]
 
         result = await plugin._handle_target("+15559999999", "")
         assert "nightwire-osx" in result
@@ -254,9 +281,10 @@ class TestTargetCommand:
 
     @pytest.mark.asyncio
     async def test_target_unknown_name(self, tmp_path):
-        ctx = _make_ctx(tmp_path, instance_name="nightwire-osx")
+        """Unknown name — responds from first device alphabetically when no target set."""
+        ctx = _make_ctx(tmp_path, instance_name="nightwire-linux")
         plugin = _make_plugin(ctx)
-        plugin._devices = ["nightwire-osx", "nightwire-linux"]
+        plugin._devices = ["nightwire-linux", "nightwire-osx"]
 
         result = await plugin._handle_target("+15559999999", "windows")
         assert "No matching" in result or "not found" in result.lower()
