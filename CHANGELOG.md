@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Rate limiter now sends only one "Rate limited" notification per window instead of replying to every excess message — prevents flooding the user with 100+ identical responses after a message burst or reconnect
+- Skip stale messages (>2 min old) delivered after WebSocket reconnect — prevents the Mac instance from re-processing messages the Linux instance already handled during sleep/disconnect
 
 ## [2.5.20] - 2026-03-29
 

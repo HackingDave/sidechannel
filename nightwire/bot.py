@@ -109,6 +109,7 @@ class SignalBot:
         self.restart_exit_code: Optional[int] = None  # Non-None = exit with this code after stop
         self._processed_messages = OrderedDict()  # Dedup: msg_hash -> timestamp
         self._last_ws_activity = 0.0  # monotonic timestamp of last websocket activity
+        self._ws_connected_at = 0.0  # wall-clock time (time.time()) of last WS connect
         self._ws_frames_received = 0  # Total WebSocket frames received (for diagnostics)
         self._watchdog_task: Optional[asyncio.Task] = None
         self._startup_notified = False  # True after "ready" message sent on first WS connect
@@ -1616,6 +1617,7 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
                 async with self.session.ws_connect(ws_url, heartbeat=30) as ws:
                     logger.info("websocket_connected")
                     self._last_ws_activity = _time.monotonic()
+                    self._ws_connected_at = _time.time()
                     reconnect_delay = 5  # Reset on successful connection
 
                     # Notify users that the bot is ready on first connect
@@ -1754,6 +1756,21 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
             # Hard cap to prevent unbounded growth on clock skew
             while len(self._processed_messages) > 10000:
                 self._processed_messages.popitem(last=False)
+
+            # Skip stale messages delivered after reconnect (e.g., Mac waking
+            # from sleep gets a burst of messages the Linux instance already
+            # handled).  Signal timestamps are milliseconds since epoch.
+            STALE_MESSAGE_THRESHOLD = 120  # seconds
+            if timestamp and self._ws_connected_at:
+                msg_age = self._ws_connected_at - (timestamp / 1000)
+                if msg_age > STALE_MESSAGE_THRESHOLD:
+                    logger.info(
+                        "stale_message_skipped",
+                        source="..." + source[-4:],
+                        age_seconds=int(msg_age),
+                        timestamp=timestamp,
+                    )
+                    return
 
             # Default empty text for attachment-only messages
             if not message_text:
