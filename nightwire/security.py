@@ -16,16 +16,20 @@ logger = structlog.get_logger()
 
 # Simple in-memory rate limiter
 _rate_limit_data: dict = defaultdict(list)
+_rate_limit_notified: dict = {}  # phone -> timestamp of first notification
 _rate_limit_last_cleanup: float = 0.0
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_REQUESTS = 30  # max requests per window
 _RATE_LIMIT_CLEANUP_INTERVAL = 300  # Prune stale entries every 5 minutes
 
 
-def check_rate_limit(phone_number: str) -> bool:
+def check_rate_limit(phone_number: str) -> str:
     """Check if a phone number is within rate limits.
 
-    Returns True if within limits, False if rate limited.
+    Returns:
+        "allowed" — within limits, request recorded.
+        "limited_notify" — first rejection in this window, caller should notify user.
+        "limited_silent" — already notified this window, caller should silently drop.
     """
     global _rate_limit_last_cleanup
     now = time.time()
@@ -36,6 +40,10 @@ def check_rate_limit(phone_number: str) -> bool:
         ts for ts in _rate_limit_data[phone_number] if ts > window_start
     ]
 
+    # Clear stale notification flags
+    if phone_number in _rate_limit_notified and _rate_limit_notified[phone_number] < window_start:
+        del _rate_limit_notified[phone_number]
+
     # Periodically prune phone numbers with no recent activity to prevent memory leak
     if now - _rate_limit_last_cleanup > _RATE_LIMIT_CLEANUP_INTERVAL:
         _rate_limit_last_cleanup = now
@@ -45,25 +53,33 @@ def check_rate_limit(phone_number: str) -> bool:
         ]
         for key in stale_keys:
             del _rate_limit_data[key]
+        stale_notified = [
+            key for key, ts in _rate_limit_notified.items() if ts < window_start
+        ]
+        for key in stale_notified:
+            del _rate_limit_notified[key]
 
     if len(_rate_limit_data[phone_number]) >= RATE_LIMIT_MAX_REQUESTS:
+        if phone_number in _rate_limit_notified:
+            return "limited_silent"
         logger.warning(
             "rate_limit_exceeded",
             phone_number="..." + phone_number[-4:],
             requests_in_window=len(_rate_limit_data[phone_number])
         )
-        return False
+        _rate_limit_notified[phone_number] = now
+        return "limited_notify"
 
     # Record this request
     _rate_limit_data[phone_number].append(now)
-    return True
+    return "allowed"
 
 
 # Lock for rate limiter dict operations in async context
 _rate_limit_lock = asyncio.Lock()
 
 
-async def check_rate_limit_async(phone_number: str) -> bool:
+async def check_rate_limit_async(phone_number: str) -> str:
     """Async-safe version of check_rate_limit."""
     async with _rate_limit_lock:
         return check_rate_limit(phone_number)
@@ -73,6 +89,7 @@ def _reset_rate_limits():
     """Reset rate limit state (for testing)."""
     global _rate_limit_last_cleanup
     _rate_limit_data.clear()
+    _rate_limit_notified.clear()
     _rate_limit_last_cleanup = 0.0
 
 

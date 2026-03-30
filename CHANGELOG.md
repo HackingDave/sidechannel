@@ -5,6 +5,11 @@ All notable changes to nightwire (formerly sidechannel) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.21] - 2026-03-30
+
+### Fixed
+- Rate limiter now sends only one "Rate limited" notification per window instead of replying to every excess message — prevents flooding the user with 100+ identical responses after a message burst or reconnect
+
 ## [2.5.20] - 2026-03-29
 
 ### Fixed

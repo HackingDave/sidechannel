@@ -28,7 +28,7 @@ def bot_mocks():
 def patch_security():
     """Bypass auth and rate-limit checks so tests reach the matcher logic."""
     with patch("nightwire.bot.is_authorized", return_value=True), \
-         patch("nightwire.bot.check_rate_limit", return_value=True):
+         patch("nightwire.bot.check_rate_limit", return_value="allowed"):
         yield
 
 

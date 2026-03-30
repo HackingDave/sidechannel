@@ -482,7 +482,7 @@ async def test_signal_message_exec_path_uses_direct_or_sandbox_runner(
     bot._start_background_task = MethodType(_capture_background_task, bot)
 
     monkeypatch.setattr("nightwire.bot.is_authorized", lambda _sender: True)
-    monkeypatch.setattr("nightwire.bot.check_rate_limit", lambda _sender: True)
+    monkeypatch.setattr("nightwire.bot.check_rate_limit", lambda _sender: "allowed")
 
     await SignalBot._process_message(bot, "+15555550123", "run this")
     await started_task["task"]

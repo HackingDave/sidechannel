@@ -1434,9 +1434,13 @@ Return ONLY valid JSON, no markdown code blocks, no explanation."""
             return  # Silently ignore unauthorized messages
 
         # Check rate limit
-        if not check_rate_limit(sender):
-            logger.warning("rate_limited", sender="..." + sender[-4:])
-            await self._send_message(sender, "Rate limited. Please wait before sending more messages.")
+        rl_status = check_rate_limit(sender)
+        if rl_status != "allowed":
+            if rl_status == "limited_notify":
+                logger.warning("rate_limited", sender="..." + sender[-4:])
+                await self._send_message(sender, "Rate limited. Please wait before sending more messages.")
+            else:
+                logger.debug("rate_limited_silent_drop", sender="..." + sender[-4:])
             return
 
         # Sanitize input

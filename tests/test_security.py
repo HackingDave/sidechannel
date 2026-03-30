@@ -71,7 +71,7 @@ async def test_rate_limiter_thread_safety():
             for i in range(50)
         ]
         results = await asyncio.gather(*tasks)
-        assert all(r is True for r in results)
+        assert all(r == "allowed" for r in results)
 
     await check_many()
 
