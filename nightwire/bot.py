@@ -21,6 +21,8 @@ from .claude_runner import get_runner
 from .project_manager import get_project_manager
 from .memory import MemoryManager, MemoryCommands
 from .autonomous import AutonomousManager, AutonomousCommands
+from .scheduler import SchedulerDatabase, SchedulerLoop
+from .scheduler.commands import SchedulerCommands
 from .plugin_loader import PluginLoader
 from .updater import AutoUpdater
 from .rate_limit_cooldown import get_cooldown_manager
@@ -139,6 +141,11 @@ class SignalBot:
         self.autonomous_manager: Optional[AutonomousManager] = None
         self.autonomous_commands: Optional[AutonomousCommands] = None
 
+        # Scheduler system (initialized after memory in start())
+        self.scheduler_db: Optional[SchedulerDatabase] = None
+        self.scheduler_loop: Optional[SchedulerLoop] = None
+        self.scheduler_commands: Optional[SchedulerCommands] = None
+
         # Auto-updater (initialized in start() if enabled)
         self.updater: Optional[AutoUpdater] = None
 
@@ -199,6 +206,35 @@ class SignalBot:
             ),
         )
 
+        # Initialize scheduler system (shares DB connection with memory/autonomous)
+        async def scheduler_notify(phone: str, message: str):
+            await self._send_message(phone, message)
+
+        self.scheduler_db = SchedulerDatabase(
+            conn=self.memory.db._conn,
+            lock=self.memory.db._lock,
+        )
+        self.scheduler_loop = SchedulerLoop(
+            db=self.scheduler_db,
+            runner=self.runner,
+            notify_callback=scheduler_notify,
+            task_semaphore=self._task_semaphore,
+        )
+        self.scheduler_commands = SchedulerCommands(
+            db=self.scheduler_db,
+            loop=self.scheduler_loop,
+            get_current_project=lambda phone: (
+                self.project_manager.get_current_project(phone),
+                self.project_manager.get_current_path(phone),
+            ),
+        )
+        await self.scheduler_loop.start()
+
+        # Inject handler into scheduler plugin (if loaded)
+        for plugin in self.plugin_loader.plugins:
+            if hasattr(plugin, 'set_handler') and plugin.name == "scheduler":
+                plugin.set_handler(self.scheduler_commands)
+
         # Start plugins
         await self.plugin_loader.start_all()
 
@@ -215,9 +251,11 @@ class SignalBot:
         self.cooldown_manager = get_cooldown_manager()
 
         async def _cooldown_on_activate():
-            """Pause autonomous loop and notify users on cooldown."""
+            """Pause autonomous loop and scheduler on cooldown."""
             if self.autonomous_manager:
                 await self.autonomous_manager.pause_loop()
+            if self.scheduler_loop:
+                await self.scheduler_loop.pause()
             state = self.cooldown_manager.get_state()
             for phone in self.config.allowed_numbers:
                 try:
@@ -229,9 +267,11 @@ class SignalBot:
                     logger.warning("cooldown_notify_error", error=str(e))
 
         async def _cooldown_on_deactivate():
-            """Resume autonomous loop and notify users when cooldown ends."""
+            """Resume autonomous loop and scheduler when cooldown ends."""
             if self.autonomous_manager:
                 await self.autonomous_manager.start_loop()
+            if self.scheduler_loop:
+                await self.scheduler_loop.resume()
             for phone in self.config.allowed_numbers:
                 try:
                     await self._send_message(
@@ -275,6 +315,8 @@ class SignalBot:
             await self.updater.stop()
         if self.autonomous_manager:
             await self.autonomous_manager.stop_loop()
+        if self.scheduler_loop:
+            await self.scheduler_loop.stop()
         if self.nightwire_runner:
             await self.nightwire_runner.close()
 
@@ -627,6 +669,19 @@ class SignalBot:
                     status += "\n\nAutonomous Loop: Paused"
             except Exception as e:
                 logger.warning("status_autonomous_error", error=str(e))
+
+            # Add scheduler info
+            if self.scheduler_db:
+                try:
+                    from .scheduler.models import ScheduleStatus as SchedStatus
+                    active_schedules = await self.scheduler_db.list_schedules(status=SchedStatus.ACTIVE)
+                    if active_schedules:
+                        sched_info = f"\n\nScheduler: {len(active_schedules)} active schedule(s)"
+                        if self.scheduler_loop and self.scheduler_loop.is_paused:
+                            sched_info += " (PAUSED)"
+                        status += sched_info
+                except Exception as e:
+                    logger.warning("status_scheduler_error", error=str(e))
 
             # Add cooldown info if active
             if self.cooldown_manager and self.cooldown_manager.is_active:

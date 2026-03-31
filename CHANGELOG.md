@@ -5,6 +5,15 @@ All notable changes to nightwire (formerly sidechannel) will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-03-31
+
+### Added
+- `/schedule` command — schedule prompts to run at regular intervals with human-friendly time expressions (e.g., `daily at 5am`, `every 6 hours`, `every weekday at 9am`)
+- Scheduled tasks run Claude silently and only notify when something noteworthy is found (monitoring/alerting pattern)
+- Schedules can be scoped to a project or run globally, with support for pause/resume/remove/history
+- Scheduler integrates with rate-limit cooldown (pauses during cooldown, resumes after)
+- Queues scheduled tasks when all Claude slots are busy instead of skipping
+
 ## [2.5.21] - 2026-03-30
 
 ### Fixed

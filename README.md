@@ -270,6 +270,48 @@ The autonomous system handles complex, multi-step development tasks. It breaks w
     #8: Token refresh should use sliding expiration window
 ```
 
+### Scheduler
+
+Schedule prompts to run at regular intervals — like cron jobs for Claude. Scheduled tasks run silently and only notify you when something noteworthy is found (errors, issues, failures). Schedules are stored in the database and survive restarts.
+
+| Command | Description |
+|---------|-------------|
+| `/schedule add <when> <prompt>` | Create a scheduled task |
+| `/schedule list` | List all scheduled tasks |
+| `/schedule remove <id>` | Delete a schedule |
+| `/schedule pause <id>` | Pause a schedule |
+| `/schedule resume <id>` | Resume a paused schedule |
+| `/schedule run <id>` | Trigger a schedule immediately |
+| `/schedule history <id>` | View recent run history |
+
+**Supported time expressions:**
+- `every hour`, `every 6 hours`, `every 30 minutes`
+- `daily at 5am`, `daily at 5:30pm`
+- `every monday at 9am`, `every friday at 3pm`
+- `every weekday at 8am`, `every weekend at 10am`
+- `twice daily at 8am and 5pm`
+
+**Flags:**
+- `--project <name>` — scope to a specific project (default: current project)
+- `--global` — run without a project context
+
+**Examples:**
+
+```
+/schedule add daily at 5am Check production for errors and fix any issues
+  → Schedule #1 created [nightwire]
+    When: daily at 05:00
+    Next run: 2026-04-01 05:00
+
+/schedule add every 6 hours --global Check all servers for disk space
+  → Schedule #2 created [global]
+
+/schedule list
+  → Scheduled Tasks (2)
+    #1 — daily at 05:00 [nightwire]
+    #2 — every 6 hours [global]
+```
+
 ### Memory & Context
 
 The memory system gives Nightwire persistent context across sessions. Conversations are automatically stored and indexed with vector embeddings for semantic search. You can also store explicit facts that persist forever.
