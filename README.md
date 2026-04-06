@@ -3,9 +3,10 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 [![Claude](https://img.shields.io/badge/Claude-AI-purple.svg)](https://anthropic.com)
+[![Codex](https://img.shields.io/badge/Codex-OpenAI-black.svg)](https://developers.openai.com/codex/cli)
 [![Signal](https://img.shields.io/badge/Signal-Messenger-blue.svg)](https://signal.org)
 
-A Signal messaging bot that integrates Claude AI for intelligent conversations, code assistance, and autonomous development tasks with independent verification, parallel execution, and production-grade reliability.
+A Signal messaging bot that integrates Claude, Codex, or OpenCode for intelligent conversations, code assistance, and autonomous development tasks with independent verification, parallel execution, and production-grade reliability.
 
 ## Why Nightwire?
 
@@ -15,7 +16,7 @@ Most AI coding tools require you to sit at your computer. Nightwire lets you man
 - **Delegate complex projects** - Describe what you want built, and Nightwire breaks it into a full PRD with stories and tasks, then executes them autonomously with parallel workers
 - **Never lose context** - Episodic memory with vector embeddings means Nightwire remembers your conversations, project preferences, and past decisions across sessions
 - **Trust the output** - Every autonomous task is independently verified by a separate Claude context using a fail-closed security model. Code that introduces security issues or logic errors is rejected automatically
-- **Powered by Claude** - All code analysis, generation, and autonomous tasks run through Claude (via Claude CLI). Optionally add OpenAI or Grok as lightweight quick-response assistants for general questions that don't need project access
+- **Bring your own coding runner** - All code analysis, generation, and autonomous tasks run through a local coding CLI. Claude CLI is the default, with Codex CLI and OpenCode CLI supported as drop-in alternatives. Optionally add OpenAI or Grok as lightweight quick-response assistants for general questions that don't need project access
 - **Stay secure** - Phone number allowlist, end-to-end encryption via Signal, rate limiting, path validation hardening, and no message content logging
 - **Run multiple instances** - Use the built-in device targeting plugin to run nightwire on several machines (laptop, desktop, server) under one Signal account and route commands to a specific instance with `/target`
 
@@ -104,6 +105,7 @@ The installer supports flags for advanced usage:
 ./install.sh --quick              # Minimal prompts, smart defaults
 ./install.sh --phone=+1555...     # Set phone number non-interactively
 ./install.sh --opencode           # Use OpenCode CLI instead of Claude CLI
+./install.sh --codex              # Use Codex CLI instead of Claude CLI
 ./install.sh --skip-signal        # Skip Signal pairing setup
 ./install.sh --skip-systemd       # Skip service installation
 ./install.sh --restart            # Restart the nightwire service
@@ -113,7 +115,7 @@ The installer supports flags for advanced usage:
 
 During interactive install, you'll be prompted for a **device name** (default: `nightwire`) — this is the name shown in Signal's **Settings → Linked Devices** list. In `--quick` mode, it defaults to `nightwire` automatically.
 
-The installer also prompts you to choose between **Claude CLI** (default) and **OpenCode CLI** as the task runner. Use `--opencode` to select OpenCode non-interactively. Both runners power `/ask`, `/do`, and `/complex` — the rest of the bot is runner-agnostic.
+The installer also prompts you to choose between **Claude CLI** (default), **Codex CLI**, and **OpenCode CLI** as the task runner. Use `--codex` or `--opencode` to select one non-interactively. All three runners power `/ask`, `/do`, and `/complex` — the rest of the bot is runner-agnostic.
 
 ## Requirements
 
@@ -121,7 +123,7 @@ The installer also prompts you to choose between **Claude CLI** (default) and **
 |---|---|
 | **Python 3.9+** | Required |
 | **Docker** | Required for Signal bridge container |
-| **Claude CLI** or **OpenCode CLI** | At least one required (powers /ask, /do, /complex). Claude is the default; OpenCode is supported as an alternative runner |
+| **Claude CLI**, **Codex CLI**, or **OpenCode CLI** | At least one required (powers /ask, /do, /complex). Claude is the default; Codex and OpenCode are supported as alternative runners |
 | **Signal account** | Required |
 
 The bot runs natively in a Python venv, managed by systemd (Linux) or launchd (macOS). Docker is only used for the Signal bridge (signal-cli-rest-api).
@@ -361,7 +363,7 @@ The memory system gives Nightwire persistent context across sessions. Conversati
 
 ### Nightwire AI Assistant (Optional)
 
-All code commands (`/ask`, `/do`, `/complex`) are powered by **Claude** via Claude CLI. Separately, you can enable a lightweight quick-response assistant backed by any OpenAI-compatible API for general knowledge questions that don't need project file access. OpenAI and Grok are built-in presets, but you can point it at any provider (Morpheus, Ollama, LM Studio, etc.). This is optional — Claude handles all the real work.
+All code commands (`/ask`, `/do`, `/complex`) are powered by your configured code runner: **Claude CLI** by default, or **Codex CLI** / **OpenCode CLI** if selected in `settings.yaml`. Separately, you can enable a lightweight quick-response assistant backed by any OpenAI-compatible API for general knowledge questions that don't need project file access. OpenAI and Grok are built-in presets, but you can point it at any provider (Morpheus, Ollama, LM Studio, etc.). This is optional — the code runner handles the real work.
 
 | Command | Description |
 |---------|-------------|
@@ -466,9 +468,9 @@ max_concurrent_tasks: 2     # Max simultaneous Claude subprocesses (prevents OOM
 # claude_path: "/usr/local/bin/claude"  # Override Claude CLI path
 
 # Runner selection (default: claude)
-# Set to "opencode" to use OpenCode CLI instead of Claude
+# Set to "opencode" or "codex" to use an alternate CLI instead of Claude
 # runner:
-#   type: "claude"       # "claude" or "opencode"
+#   type: "claude"       # "claude", "opencode", or "codex"
 #   path: ""             # optional: explicit path to runner binary
 
 # Project directories
@@ -523,6 +525,14 @@ Claude CLI handles its own authentication — no API key needed in `.env`.
 
 ```bash
 claude login
+```
+
+### Codex CLI Authentication
+
+Codex CLI also handles its own authentication locally.
+
+```bash
+codex login
 ```
 
 ### Environment Variables (.env)
@@ -902,18 +912,18 @@ Nightwire uses a multi-layered memory architecture built on SQLite with sqlite-v
 7. **Project isolation** - Memories are scoped to projects by default, with `/global` for cross-project knowledge
 8. **Token budgeting** - Retrieved context is capped at `max_context_tokens` (default: 1500) to leave room for Claude's actual work
 
-This means Claude gets progressively smarter about your projects over time - it knows your conventions, past decisions, and what's been tried before.
+This means the runner gets progressively smarter about your projects over time - it knows your conventions, past decisions, and what's been tried before.
 
 ## How Autonomous Development Works
 
-The autonomous system is designed for tasks too large for a single Claude invocation:
+The autonomous system is designed for tasks too large for a single runner invocation:
 
-1. **PRD Creation** (`/complex`) - Claude analyzes your request and generates a structured PRD with stories and atomic tasks
+1. **PRD Creation** (`/complex`) - The configured runner analyzes your request and generates a structured PRD with stories and atomic tasks
 2. **Dependency Resolution** - Tasks are analyzed for dependencies; independent tasks can run in parallel
-3. **Parallel Dispatch** - Up to `max_parallel` workers execute tasks concurrently, each with its own Claude CLI session
-4. **Adaptive Effort** - Task type (feature, bugfix, refactor, test) is auto-detected and mapped to an effort level controlling Claude's thoroughness
-5. **Independent Verification** - A *separate* Claude context reviews each task's git diff. Security concerns or logic errors cause the task to fail (fail-closed). Only infrastructure failures (timeout, crash) pass through (fail-open)
-6. **Auto-Fix Loop** - If verification fails, a fresh Claude context gets the failure reason and attempts to fix the issue (up to 2 attempts)
+3. **Parallel Dispatch** - Up to `max_parallel` workers execute tasks concurrently, each with its own runner session
+4. **Adaptive Effort** - Task type (feature, bugfix, refactor, test) is auto-detected and mapped to an effort level controlling the runner's thoroughness
+5. **Independent Verification** - A *separate* runner context reviews each task's git diff. Security concerns or logic errors cause the task to fail (fail-closed). Only infrastructure failures (timeout, crash) pass through (fail-open)
+6. **Auto-Fix Loop** - If verification fails, a fresh runner context gets the failure reason and attempts to fix the issue (up to 2 attempts)
 7. **Quality Gates** - Test baselines are captured *before* each task. After completion, tests run again and only *new* failures (regressions) block the task. Pre-existing failures don't
 8. **Git Safety** - Automatic git checkpoints before execution and atomic commits after, protected by asyncio locks for concurrent access
 9. **Progress Updates** - Signal notifications as tasks complete, fail, or need attention
@@ -928,7 +938,7 @@ The autonomous system is designed for tasks too large for a single Claude invoca
 - API keys are stored in `.env` (not committed to git)
 - Signal messages are end-to-end encrypted
 - No message content is logged by default
-- Claude CLI runs with your local user permissions
+- The configured code runner runs with your local user permissions
 
 ### Hardening Checklist
 - [ ] Run as dedicated low-privilege user (never root)
@@ -940,7 +950,7 @@ The autonomous system is designed for tasks too large for a single Claude invoca
 
 ### Docker Sandbox (Optional)
 
-For additional security, nightwire can run Claude CLI inside a Docker container. This limits the blast radius if Claude does something destructive — only the mounted project directory is accessible.
+For additional security, nightwire can run the configured code runner inside a Docker container. This limits the blast radius if the runner does something destructive — only the mounted project directory is accessible.
 
 **Setup:**
 
@@ -961,7 +971,7 @@ sandbox:
   tmpfs_size: "256m"
 ```
 
-The installer offers sandbox setup automatically if Docker is available. When sandbox is enabled and Docker is unavailable, Claude tasks will fail with a clear error rather than falling back to native execution.
+The installer offers sandbox setup automatically if Docker is available. When sandbox is enabled and Docker is unavailable, code tasks will fail with a clear error rather than falling back to native execution.
 
 ## Troubleshooting
 
@@ -971,11 +981,11 @@ The installer offers sandbox setup automatically if Docker is available. When sa
 2. Verify device is linked: `curl http://127.0.0.1:8080/v1/accounts`
 3. Check logs: `docker logs signal-api`
 
-### Claude commands failing
+### Code runner commands failing
 
-1. Verify Claude CLI works: `claude --version`
-2. Check authentication: `claude login`
-3. Test manually: `claude "hello"`
+1. Verify your configured runner works: `claude --version`, `codex --help`, or `opencode --help`
+2. Check authentication if needed: `claude login` or `codex login`
+3. Test the runner manually outside nightwire before retrying
 
 ### Memory not persisting
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 #
 # nightwire installer
-# Signal + Claude AI Bot
+# Signal AI Bot
 #
-# Usage: ./install.sh [--skip-signal] [--skip-systemd] [--opencode] [--uninstall] [--restart]
+# Usage: ./install.sh [--skip-signal] [--skip-systemd] [--opencode|--codex] [--uninstall] [--restart]
 #
 
 set -e
@@ -371,6 +371,9 @@ for arg in "$@"; do
         --opencode)
             RUNNER_TYPE="opencode"
             ;;
+        --codex)
+            RUNNER_TYPE="codex"
+            ;;
         --help|-h)
             echo "Usage: ./install.sh [options]"
             echo ""
@@ -379,6 +382,7 @@ for arg in "$@"; do
             echo "  --phone=NUMBER     Set phone number (e.g., --phone=+15551234567)"
             echo "  --skip-signal      Skip Signal pairing (configure later)"
             echo "  --opencode         Use OpenCode CLI instead of Claude CLI"
+            echo "  --codex            Use Codex CLI instead of Claude CLI"
             echo "  --skip-systemd     Skip service installation"
             echo "  --uninstall        Remove nightwire service and containers"
             echo "  --restart          Restart the nightwire service"
@@ -773,7 +777,7 @@ else
     exit 1
 fi
 
-# Code runner CLI (Claude default, OpenCode with --opencode flag)
+# Code runner CLI (Claude default, alternate runner via --opencode/--codex)
 if [ "$RUNNER_TYPE" = "opencode" ]; then
     if command -v opencode &> /dev/null; then
         RUNNER_PATH="$(command -v opencode)"
@@ -787,6 +791,30 @@ if [ "$RUNNER_TYPE" = "opencode" ]; then
         echo -e "    Install: ${CYAN}https://opencode.ai/docs/cli${NC}"
         if [ "$QUICK_MODE" = true ]; then
             echo -e "    ${BLUE}(--quick: continuing without OpenCode CLI)${NC}"
+        else
+            read -p "    Continue anyway? [y/N] " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+        fi
+    fi
+elif [ "$RUNNER_TYPE" = "codex" ]; then
+    if command -v codex &> /dev/null; then
+        RUNNER_PATH="$(command -v codex)"
+        echo -e "  ${GREEN}✓${NC} Codex CLI"
+    elif [ -f "$HOME/.npm-global/bin/codex" ]; then
+        RUNNER_PATH="$HOME/.npm-global/bin/codex"
+        echo -e "  ${GREEN}✓${NC} Codex CLI ($RUNNER_PATH)"
+    elif [ -f "$HOME/.local/bin/codex" ]; then
+        RUNNER_PATH="$HOME/.local/bin/codex"
+        echo -e "  ${GREEN}✓${NC} Codex CLI ($RUNNER_PATH)"
+    else
+        echo -e "  ${YELLOW}!${NC} Codex CLI not found"
+        echo -e "    --codex was specified but Codex CLI is not installed."
+        echo -e "    Install: ${CYAN}https://developers.openai.com/codex/cli${NC}"
+        if [ "$QUICK_MODE" = true ]; then
+            echo -e "    ${BLUE}(--quick: continuing without Codex CLI)${NC}"
         else
             read -p "    Continue anyway? [y/N] " -n 1 -r
             echo
@@ -1062,8 +1090,8 @@ YAML
     fi
 fi
 
-# Runner selection (skip if --opencode flag already set)
-if [ "$RUNNER_TYPE" != "opencode" ]; then
+# Runner selection (skip if a runner was selected via CLI flag)
+if [ "$RUNNER_TYPE" = "claude" ]; then
     if [ "$QUICK_MODE" = true ]; then
         RUNNER_CHOICE="1"
         echo -e "  ${BLUE}(--quick: defaulting to Claude CLI)${NC}"
@@ -1073,6 +1101,7 @@ if [ "$RUNNER_TYPE" != "opencode" ]; then
         echo ""
         echo "    1) Claude CLI (default)"
         echo "    2) OpenCode CLI"
+        echo "    3) Codex CLI"
         echo ""
         read -p "  > " RUNNER_CHOICE
         echo ""
@@ -1087,16 +1116,35 @@ if [ "$RUNNER_TYPE" != "opencode" ]; then
         elif [ -f "$HOME/.local/bin/opencode" ]; then
             RUNNER_PATH="$HOME/.local/bin/opencode"
         fi
+    elif [ "$RUNNER_CHOICE" = "3" ]; then
+        RUNNER_TYPE="codex"
+        if command -v codex &> /dev/null; then
+            RUNNER_PATH="$(command -v codex)"
+        elif [ -f "$HOME/.npm-global/bin/codex" ]; then
+            RUNNER_PATH="$HOME/.npm-global/bin/codex"
+        elif [ -f "$HOME/.local/bin/codex" ]; then
+            RUNNER_PATH="$HOME/.local/bin/codex"
+        fi
     fi
 fi
 
-# Persist runner selection in settings.yaml when OpenCode is chosen
-if [ "$RUNNER_TYPE" = "opencode" ]; then
+# Persist runner selection in settings.yaml when a non-default runner is chosen
+if [ "$RUNNER_TYPE" = "opencode" ] || [ "$RUNNER_TYPE" = "codex" ]; then
     if [ -z "$RUNNER_PATH" ]; then
-        if command -v opencode &> /dev/null; then
-            RUNNER_PATH="$(command -v opencode)"
-        elif [ -f "$HOME/.local/bin/opencode" ]; then
-            RUNNER_PATH="$HOME/.local/bin/opencode"
+        if [ "$RUNNER_TYPE" = "opencode" ]; then
+            if command -v opencode &> /dev/null; then
+                RUNNER_PATH="$(command -v opencode)"
+            elif [ -f "$HOME/.local/bin/opencode" ]; then
+                RUNNER_PATH="$HOME/.local/bin/opencode"
+            fi
+        elif [ "$RUNNER_TYPE" = "codex" ]; then
+            if command -v codex &> /dev/null; then
+                RUNNER_PATH="$(command -v codex)"
+            elif [ -f "$HOME/.npm-global/bin/codex" ]; then
+                RUNNER_PATH="$HOME/.npm-global/bin/codex"
+            elif [ -f "$HOME/.local/bin/codex" ]; then
+                RUNNER_PATH="$HOME/.local/bin/codex"
+            fi
         fi
     fi
     update_runner_settings "$SETTINGS_FILE" "$RUNNER_TYPE" "$RUNNER_PATH"
@@ -1277,7 +1325,7 @@ if [ "$DOCKER_OK" = true ]; then
         REPLY="n"
     else
         echo ""
-        if [ "$RUNNER_TYPE" = "opencode" ]; then
+        if [ "$RUNNER_TYPE" = "opencode" ] || [ "$RUNNER_TYPE" = "codex" ]; then
             echo -e "  ${BLUE}Optional:${NC} Docker sandbox runs your selected code runner inside a container"
         else
             echo -e "  ${BLUE}Optional:${NC} Docker sandbox runs Claude CLI inside a container"
@@ -1487,7 +1535,7 @@ if [ "$SKIP_SYSTEMD" = false ]; then
 
             cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=nightwire - Signal Claude Bot
+Description=nightwire - Signal AI Bot
 After=network.target docker.service
 
 [Service]
@@ -1644,6 +1692,12 @@ else
         if ! command -v opencode &> /dev/null && ! [ -f "$HOME/.local/bin/opencode" ]; then
             echo ""
             echo -e "  ${STEP}. Install OpenCode CLI: ${CYAN}https://opencode.ai/docs/cli${NC}"
+            STEP=$((STEP + 1))
+        fi
+    elif [ "$RUNNER_TYPE" = "codex" ]; then
+        if ! command -v codex &> /dev/null && ! [ -f "$HOME/.npm-global/bin/codex" ] && ! [ -f "$HOME/.local/bin/codex" ]; then
+            echo ""
+            echo -e "  ${STEP}. Install Codex CLI: ${CYAN}https://developers.openai.com/codex/cli${NC}"
             STEP=$((STEP + 1))
         fi
     else

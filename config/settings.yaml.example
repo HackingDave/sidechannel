@@ -23,9 +23,9 @@ max_concurrent_tasks: 2       # Max simultaneous Claude subprocesses (prevents O
 # claude_path: "/usr/local/bin/claude"  # Override Claude CLI path
 
 # Runner selection (default: claude)
-# Set to "opencode" to use OpenCode CLI instead of Claude
+# Set to "opencode" or "codex" to use an alternate CLI instead of Claude
 # runner:
-#   type: "claude"       # "claude" or "opencode"
+#   type: "claude"       # "claude", "opencode", or "codex"
 #   path: ""             # optional: explicit path to runner binary
 
 # Memory System

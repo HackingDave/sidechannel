@@ -155,6 +155,16 @@ class Config:
             home_local = Path.home() / ".local" / "bin" / "opencode"
             if home_local.exists():
                 return str(home_local)
+        elif self.runner_type == "codex":
+            found = shutil.which("codex")
+            if found:
+                return found
+            npm_global = Path.home() / ".npm-global" / "bin" / "codex"
+            if npm_global.exists():
+                return str(npm_global)
+            home_local = Path.home() / ".local" / "bin" / "codex"
+            if home_local.exists():
+                return str(home_local)
 
         return self.claude_path
 

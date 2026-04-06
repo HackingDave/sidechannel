@@ -125,6 +125,17 @@ class ClaudeRunner:
                 "--dir",
                 str(project_path),
             ]
+        if self.config.runner_type == "codex":
+            return [
+                self.config.runner_path,
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "-s",
+                "danger-full-access",
+                "-C",
+                str(project_path),
+            ]
 
         return [
             self.config.claude_path,
@@ -144,19 +155,22 @@ class ClaudeRunner:
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "USER": os.environ.get("USER", ""),
             "LANG": os.environ.get("LANG", "en_US.UTF-8"),
-            # Cap Node.js heap to 8GB to prevent OOM kills from runaway Claude processes
+            # Cap Node.js heap to 8GB to prevent OOM kills from runaway CLI processes
             "NODE_OPTIONS": os.environ.get("NODE_OPTIONS", "--max-old-space-size=8192"),
         }
 
-        if self.config.runner_type == "opencode":
+        if self.config.runner_type in {"opencode", "codex"}:
             env.update(
                 {
                     "XDG_CONFIG_HOME": os.environ.get("XDG_CONFIG_HOME", ""),
                     "XDG_DATA_HOME": os.environ.get("XDG_DATA_HOME", ""),
                     "XDG_STATE_HOME": os.environ.get("XDG_STATE_HOME", ""),
-                    "OPENCODE_CONFIG_DIR": os.environ.get("OPENCODE_CONFIG_DIR", ""),
                 }
             )
+        if self.config.runner_type == "opencode":
+            env["OPENCODE_CONFIG_DIR"] = os.environ.get("OPENCODE_CONFIG_DIR", "")
+        elif self.config.runner_type == "codex":
+            env["CODEX_HOME"] = os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
         else:
             env["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
 
@@ -204,6 +218,49 @@ class ClaudeRunner:
                 message = event.get("message")
                 if isinstance(message, dict):
                     append_content_parts(message.get("content"))
+
+        return "\n".join(text_parts).strip()
+
+    def _extract_codex_text(self, output: str) -> str:
+        """Extract readable text from Codex JSONL output."""
+        text_parts: List[str] = []
+
+        def append_text(text: object) -> None:
+            if isinstance(text, str) and text.strip():
+                text_parts.append(text.strip())
+
+        def append_content_parts(content: object) -> None:
+            if not isinstance(content, list):
+                return
+            for part in content:
+                if isinstance(part, str):
+                    append_text(part)
+                    continue
+                if not isinstance(part, dict):
+                    continue
+                append_text(part.get("text"))
+
+        for line in output.splitlines():
+            line = line.strip()
+            if not line or not line.startswith("{"):
+                continue
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(event, dict):
+                continue
+
+            event_type = event.get("type")
+            if event_type == "item.completed":
+                item = event.get("item")
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "agent_message":
+                    append_text(item.get("text"))
+                    append_content_parts(item.get("content"))
 
         return "\n".join(text_parts).strip()
 
@@ -474,15 +531,23 @@ class ClaudeRunner:
                 return False, f"Claude exited with code {return_code}", category
 
             result = output if output else errors
-            if self.config.runner_type == "opencode" and return_code == 0:
-                extracted = self._extract_opencode_text(output)
-                if extracted:
-                    result = extracted
+            if return_code == 0:
+                if self.config.runner_type == "opencode":
+                    extracted = self._extract_opencode_text(output)
+                    if extracted:
+                        result = extracted
+                elif self.config.runner_type == "codex":
+                    extracted = self._extract_codex_text(output)
+                    if extracted:
+                        result = extracted
 
             return True, result, ErrorCategory.PERMANENT
 
         except FileNotFoundError:
-            runner_name = "OpenCode" if self.config.runner_type == "opencode" else "Claude"
+            runner_name = {
+                "opencode": "OpenCode",
+                "codex": "Codex",
+            }.get(self.config.runner_type, "Claude")
             logger.error("claude_not_found", runner=runner_name.lower())
             return (
                 False,

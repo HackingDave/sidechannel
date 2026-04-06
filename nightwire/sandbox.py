@@ -103,6 +103,16 @@ def build_sandbox_command(
             "-v",
             f"{Path.home() / '.local/share/opencode'}:/home/sandbox/.local/share/opencode:ro",
         ])
+    elif effective_runner_type == "codex":
+        docker_cmd.extend([
+            "-e", "HOME",
+            "-e", "XDG_CONFIG_HOME",
+            "-e", "XDG_DATA_HOME",
+            "-e", "XDG_STATE_HOME",
+            "-e", "CODEX_HOME",
+            "-v",
+            f"{Path.home() / '.codex'}:/home/sandbox/.codex:ro",
+        ])
     else:
         docker_cmd.extend([
             "-e", "ANTHROPIC_API_KEY",
