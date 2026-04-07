@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import signal
 from enum import Enum
 from pathlib import Path
@@ -21,6 +22,24 @@ PROGRESS_UPDATE_INTERVAL = 300
 # Retry configuration
 MAX_RETRIES = 1
 RETRY_BASE_DELAY = 5  # seconds
+
+
+def _normalize_cursor_agent_text(text: str) -> str:
+    """Collapse huge blank runs and stray whitespace from Cursor Agent JSON streams."""
+    text = (text or "").replace("\r\n", "\n").strip()
+    if not text:
+        return text
+    lines = [ln.rstrip() for ln in text.split("\n")]
+    collapsed: List[str] = []
+    prev_blank = False
+    for line in lines:
+        is_blank = line == ""
+        if is_blank and prev_blank:
+            continue
+        prev_blank = is_blank
+        collapsed.append(line)
+    text = "\n".join(collapsed).strip()
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 class ErrorCategory(str, Enum):
@@ -331,7 +350,7 @@ class ClaudeRunner:
             append_content(event.get("content"))
             append_content(event.get("result"))
 
-        return "\n".join(dict.fromkeys(text_parts)).strip()
+        return _normalize_cursor_agent_text("\n".join(dict.fromkeys(text_parts)))
 
     async def run_claude(
         self,
