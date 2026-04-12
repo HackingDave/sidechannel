@@ -145,16 +145,24 @@ class ClaudeRunner:
                 str(project_path),
             ]
         if self.config.runner_type == "codex":
-            return [
+            command = [
                 self.config.runner_path,
                 "exec",
                 "--json",
                 "--skip-git-repo-check",
                 "-s",
                 "danger-full-access",
-                "-C",
-                str(project_path),
             ]
+            runner_model = getattr(self.config, "runner_model", None)
+            if runner_model:
+                command.extend(["-m", runner_model])
+            runner_reasoning_effort = getattr(self.config, "runner_reasoning_effort", None)
+            if runner_reasoning_effort:
+                command.extend(
+                    ["-c", f'model_reasoning_effort="{runner_reasoning_effort}"']
+                )
+            command.extend(["-C", str(project_path), prompt])
+            return command
         if self.config.runner_type == "cursor":
             runner_path = Path(self.config.runner_path)
             command = [str(runner_path)]
@@ -409,8 +417,8 @@ class ClaudeRunner:
         if timeout is None:
             timeout = self.config.claude_timeout
 
-        # Build the runner command (prompt is passed via stdin to avoid
-        # argument parsing issues when prompt starts with dashes)
+        # Build the runner command. Claude/OpenCode still read prompts from stdin;
+        # Codex/Cursor expect the prompt as a CLI argument.
         cmd = self._build_runner_command(effective_project, full_prompt)
 
         logger.info(
@@ -487,8 +495,9 @@ class ClaudeRunner:
     ) -> Tuple[bool, str, ErrorCategory]:
         """Execute a single Claude CLI invocation.
 
-        The prompt is passed via stdin to avoid argument parsing issues
-        when prompt content starts with dashes.
+        Claude/OpenCode receive the prompt via stdin. Codex/Cursor receive it
+        as a CLI argument and must not inherit an open stdin pipe, otherwise
+        they will try to append piped stdin to the prompt.
 
         Returns:
             Tuple of (success, output_or_error, error_category)
@@ -534,10 +543,14 @@ class ClaudeRunner:
                 )
                 cmd = build_sandbox_command(list(cmd), effective_cwd, sandbox_cfg)
 
+            stdin_target = asyncio.subprocess.PIPE
+            if self.config.runner_type in {"codex", "cursor"}:
+                stdin_target = asyncio.subprocess.DEVNULL
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(effective_cwd),
-                stdin=asyncio.subprocess.PIPE,
+                stdin=stdin_target,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_subprocess_env,
@@ -550,7 +563,7 @@ class ClaudeRunner:
 
             try:
                 stdin_data = None
-                if self.config.runner_type != "cursor":
+                if self.config.runner_type not in {"codex", "cursor"}:
                     stdin_data = prompt.encode("utf-8")
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(input=stdin_data), timeout=timeout

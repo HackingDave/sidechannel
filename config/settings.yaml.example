@@ -28,6 +28,7 @@ max_concurrent_tasks: 2       # Max simultaneous Claude subprocesses (prevents O
 #   type: "claude"       # "claude", "opencode", "codex", or "cursor"
 #   path: ""             # optional: explicit path to runner binary
 #   model: ""            # optional: model override (Cursor default: composer-2)
+#   reasoning_effort: "" # optional: Codex reasoning effort, e.g. low/medium/high/xhigh
 
 # Memory System
 memory:

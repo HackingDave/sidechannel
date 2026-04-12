@@ -200,6 +200,14 @@ class Config:
 
         return None
 
+    @property
+    def runner_reasoning_effort(self) -> Optional[str]:
+        """Get the configured reasoning effort for the active runner, if any."""
+        configured = self.settings.get("runner", {}).get("reasoning_effort")
+        if configured is None:
+            return None
+        return str(configured).strip()
+
     # nightwire AI assistant configuration (any OpenAI-compatible provider)
     def _get_dict_setting(self, *keys: str) -> dict:
         """Safely get a config section that should be a dict, with fallback keys.
