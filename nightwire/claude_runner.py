@@ -161,7 +161,7 @@ class ClaudeRunner:
                 command.extend(
                     ["-c", f'model_reasoning_effort="{runner_reasoning_effort}"']
                 )
-            command.extend(["-C", str(project_path), prompt])
+            command.extend(["-C", str(project_path), "--", prompt])
             return command
         if self.config.runner_type == "cursor":
             runner_path = Path(self.config.runner_path)
